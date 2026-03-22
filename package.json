@@ -4,25 +4,22 @@
   "description": "A browser-based multiplayer billiards game with shareable room invites.",
   "main": "server.js",
   "scripts": {
+    "start": "node server.js",
     "dev": "node server.js",
     "test": "node --check server.js && node --check app.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Larry-LL/Financial_App.git"
+    "url": "git+https://github.com/Larry-LL/felt-club-billiards.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "bugs": {
-    "url": "https://github.com/Larry-LL/Financial_App/issues"
+    "url": "https://github.com/Larry-LL/felt-club-billiards/issues"
   },
-  "homepage": "https://github.com/Larry-LL/Financial_App#readme",
+  "homepage": "https://github.com/Larry-LL/felt-club-billiards#readme",
   "dependencies": {
-    "better-sqlite3": "^12.6.2",
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "plaid": "^41.4.0"
+    "express": "^5.2.1"
   }
 }
