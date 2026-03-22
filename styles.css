@@ -276,6 +276,41 @@ input[type="text"]:focus {
   background: linear-gradient(180deg, white 0 26%, #4d7cff 26% 74%, white 74% 100%);
 }
 
+/* ── Power bar ──────────────────────────────────────────── */
+
+.power-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.power-track {
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.power-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(to right, #14c89b, #f7d154, #ff5f6d);
+  transition: width 30ms linear;
+}
+
+.power-value {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text);
+  text-align: right;
+  letter-spacing: -0.02em;
+}
+
 /* ── Re-Rack ────────────────────────────────────────────── */
 
 .re-rack {

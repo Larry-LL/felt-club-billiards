@@ -19,6 +19,9 @@ const turnText = document.getElementById("turnText");
 const tableStateText = document.getElementById("tableStateText");
 const scoreboard = document.getElementById("scoreboard");
 const messageBox = document.getElementById("message");
+const powerBarDiv = document.getElementById("powerBar");
+const powerFill = document.getElementById("powerFill");
+const powerValue = document.getElementById("powerValue");
 const canvas = document.getElementById("tableCanvas");
 const ctx = canvas.getContext("2d");
 
@@ -345,7 +348,24 @@ function getAimVector() {
 function render() {
   renderHeader();
   renderScoreboard();
+  renderPowerBar();
   renderTable();
+}
+
+function renderPowerBar() {
+  if (!aimState.active) {
+    powerBarDiv.classList.add("hidden");
+    return;
+  }
+  const vector = getAimVector();
+  if (!vector) {
+    powerBarDiv.classList.add("hidden");
+    return;
+  }
+  powerBarDiv.classList.remove("hidden");
+  const pct = Math.round(vector.power * 100);
+  powerFill.style.width = `${pct}%`;
+  powerValue.textContent = `${pct}%`;
 }
 
 function renderHeader() {
@@ -440,7 +460,7 @@ function renderTable() {
   balls.forEach(drawBallShadow);
   balls.forEach(drawBall);
 
-  if (canShoot()) {
+  if (aimState.active && canShoot()) {
     drawAimGuide();
   }
 
@@ -537,7 +557,11 @@ function drawBall(ball) {
     ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
     ctx.clip();
     ctx.fillStyle = ball.color;
-    ctx.fillRect(ball.x - radius, ball.y - radius * 0.4, radius * 2, radius * 0.8);
+    ctx.fillRect(ball.x - radius, ball.y - radius * 0.58, radius * 2, radius * 1.16);
+    // Subtle dark edges on the stripe borders for definition
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.fillRect(ball.x - radius, ball.y - radius * 0.58, radius * 2, 2);
+    ctx.fillRect(ball.x - radius, ball.y + radius * 0.58 - 2, radius * 2, 2);
     ctx.restore();
   }
 
@@ -561,6 +585,10 @@ function drawBall(ball) {
 }
 
 function makeBallGradient(ball, radius) {
+  const baseColor =
+    ball.suit === "stripes" ? "#f0ece0" :
+    ball.number === 8 ? "#1c1c1c" :
+    ball.color;
   const gradient = ctx.createRadialGradient(
     ball.x - radius * 0.42,
     ball.y - radius * 0.5,
@@ -569,9 +597,9 @@ function makeBallGradient(ball, radius) {
     ball.y,
     radius
   );
-  gradient.addColorStop(0, lightenColor(ball.color, 0.36));
-  gradient.addColorStop(0.55, ball.number === 8 ? "#1c1c1c" : ball.color);
-  gradient.addColorStop(1, darkenColor(ball.number === 8 ? "#1c1c1c" : ball.color, 0.28));
+  gradient.addColorStop(0, lightenColor(baseColor, 0.4));
+  gradient.addColorStop(0.55, baseColor);
+  gradient.addColorStop(1, darkenColor(baseColor, 0.22));
   return gradient;
 }
 
