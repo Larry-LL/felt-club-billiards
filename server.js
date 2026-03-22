@@ -812,10 +812,16 @@ function maybeQueueComputerTurn(room) {
 
   room.game.isAiThinking = true;
   broadcastRoom(room);
+
+  // Wait for the client animation to finish before firing the CPU shot.
+  // Animation duration = frames * 16 ms; add 600 ms buffer.
+  const animDuration = room.game.lastShotFrames.length * 16;
+  const delay = Math.max(1400, animDuration + 600);
+
   room.aiTimeout = setTimeout(() => {
     room.aiTimeout = null;
     runComputerTurn(room, computer);
-  }, 950);
+  }, delay);
 }
 
 function runComputerTurn(room, computer) {
@@ -842,36 +848,85 @@ function runComputerTurn(room, computer) {
 
 function chooseComputerShot(room, cueBall, playerId) {
   const legalTarget = determineLegalTarget(room, playerId, countRemainingBySuit(room.game.balls));
-  const targets = room.game.balls
-    .filter((ball) => {
-      if (ball.kind !== "object" || ball.pocketed) {
-        return false;
-      }
-      if (legalTarget === "any-non-eight") {
-        return ball.number !== 8;
-      }
-      if (legalTarget === "eight") {
-        return ball.number === 8;
-      }
-      return ball.suit === legalTarget;
-    })
-    .sort((a, b) => {
-      const da = Math.hypot(a.x - cueBall.x, a.y - cueBall.y);
-      const db = Math.hypot(b.x - cueBall.x, b.y - cueBall.y);
-      return da - db;
-    });
+  const targets = room.game.balls.filter((ball) => {
+    if (ball.kind !== "object" || ball.pocketed) return false;
+    if (legalTarget === "any-non-eight") return ball.number !== 8;
+    if (legalTarget === "eight") return ball.number === 8;
+    return ball.suit === legalTarget;
+  });
 
-  const target = targets[0];
-  if (!target) {
-    return { angle: 0, power: 0.5 };
+  if (targets.length === 0) {
+    return { angle: Math.random() * Math.PI * 2, power: 0.4 };
   }
 
-  const angle = Math.atan2(target.y - cueBall.y, target.x - cueBall.x) + (Math.random() - 0.5) * 0.18;
-  const distance = Math.hypot(target.x - cueBall.x, target.y - cueBall.y);
-  return {
-    angle,
-    power: clamp(distance / 280 + 0.22, 0.28, 0.88),
-  };
+  let bestShot = null;
+  let bestScore = -Infinity;
+
+  for (const target of targets) {
+    for (const pocket of TABLE.pockets) {
+      // Vector from target ball to pocket
+      const tpx = pocket.x - target.x;
+      const tpy = pocket.y - target.y;
+      const tpDist = Math.hypot(tpx, tpy);
+      if (tpDist === 0) continue;
+
+      // Ghost ball: where the cue ball center must sit to send target into this pocket
+      const ghostX = target.x - (tpx / tpDist) * TABLE.ballRadius * 2;
+      const ghostY = target.y - (tpy / tpDist) * TABLE.ballRadius * 2;
+
+      // Reject ghost balls outside the table
+      if (
+        ghostX < TABLE.ballRadius || ghostX > TABLE.width - TABLE.ballRadius ||
+        ghostY < TABLE.ballRadius || ghostY > TABLE.height - TABLE.ballRadius
+      ) {
+        continue;
+      }
+
+      // Vector from cue ball to ghost ball
+      const cgx = ghostX - cueBall.x;
+      const cgy = ghostY - cueBall.y;
+      const cgDist = Math.hypot(cgx, cgy);
+      if (cgDist < TABLE.ballRadius * 2) continue;
+
+      // Cut angle: between (cue→target) and (target→pocket)
+      const ctx2 = target.x - cueBall.x;
+      const cty2 = target.y - cueBall.y;
+      const ctDist = Math.hypot(ctx2, cty2);
+      const dot = (ctx2 * tpx + cty2 * tpy) / (ctDist * tpDist);
+      const cutAngle = Math.acos(clamp(dot, -1, 1));
+
+      // Skip cuts harder than 70°
+      if (cutAngle > (Math.PI * 7) / 18) continue;
+
+      // Score: reward easy cut angles and short cue-to-ghost distance
+      const cutScore = 1 - cutAngle / (Math.PI / 2);
+      const distScore = 1 - Math.min(cgDist / 700, 1);
+      const score = cutScore * 0.65 + distScore * 0.35;
+
+      if (score > bestScore) {
+        bestScore = score;
+        const aimErr = (Math.random() - 0.5) * 0.07;
+        bestShot = {
+          angle: Math.atan2(cgy, cgx) + aimErr,
+          power: clamp(cgDist / 350 + 0.3, 0.3, 0.92),
+        };
+      }
+    }
+  }
+
+  // Fallback: aim directly at nearest target
+  if (!bestShot) {
+    const nearest = targets.reduce((a, b) =>
+      Math.hypot(a.x - cueBall.x, a.y - cueBall.y) <= Math.hypot(b.x - cueBall.x, b.y - cueBall.y) ? a : b
+    );
+    const distance = Math.hypot(nearest.x - cueBall.x, nearest.y - cueBall.y);
+    bestShot = {
+      angle: Math.atan2(nearest.y - cueBall.y, nearest.x - cueBall.x) + (Math.random() - 0.5) * 0.15,
+      power: clamp(distance / 280 + 0.22, 0.28, 0.88),
+    };
+  }
+
+  return bestShot;
 }
 
 function buildRoomPayload(room, playerId) {
