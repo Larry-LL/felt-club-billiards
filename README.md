@@ -14,7 +14,8 @@ Felt Club 8-Ball is a standalone browser-based billiards game with live room lin
 ## Run Locally
 
 ```bash
-cd /Users/lawrence/Desktop/Financial_App/felt-club-billiards
+git clone https://github.com/Larry-LL/felt-club-billiards.git
+cd felt-club-billiards
 npm install
 npm run dev
 ```
