@@ -7,99 +7,49 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="page-shell">
-      <header class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Live 8-Ball Rooms</p>
-          <h1>Play 8-ball online with live rooms, open-table rules, solids, stripes, and the 8-ball finish.</h1>
-          <p class="lede">
-            Share a room link with a friend, or practice against yourself or the house bot.
-            When this server is deployed on a public URL, remote players can join the same room
-            and play together in real time.
-          </p>
+    <div class="shell">
+      <aside class="sidebar">
+        <h1 class="logo">Felt Club</h1>
+
+        <input id="nameInput" type="text" maxlength="24" placeholder="Your name" />
+        <input id="roomInput" type="hidden" />
+
+        <div id="modeButtons" class="button-col">
+          <button id="computerButton" class="primary-button" type="button">Solo vs Computer</button>
+          <button id="onlineButton" class="secondary-button" type="button">Play Online</button>
         </div>
 
-        <aside class="hero-card">
-          <p class="card-label">Match Status</p>
-          <strong id="roomHeadline">No room yet</strong>
-          <span id="statusText">Create a room, copy the link, and let someone join from anywhere this server is reachable.</span>
-          <button id="copyInviteButton" class="ghost-button" type="button" disabled>
-            Copy Room Link
-          </button>
-        </aside>
-      </header>
+        <div id="joinButtons" class="button-col hidden">
+          <button id="joinRoomButton" class="primary-button" type="button">Join Game</button>
+        </div>
 
-      <main class="layout">
-        <section class="stack">
-          <section class="panel">
-            <div class="section-heading">
-              <h2>Join Or Host</h2>
-              <p>Each room lives on this server. If the app is hosted publicly, friends can join online with the same link.</p>
-            </div>
+        <div id="invitePanel" class="invite-panel hidden">
+          <span class="invite-label">Invite a friend</span>
+          <button id="copyInviteButton" class="secondary-button" type="button">Copy Link</button>
+        </div>
 
-            <div class="form-grid">
-              <label>
-                Display name
-                <input id="nameInput" type="text" maxlength="24" placeholder="Player name" />
-              </label>
-              <label>
-                Room code
-                <input id="roomInput" type="text" maxlength="5" placeholder="ABCDE" />
-              </label>
-            </div>
+        <div id="message" class="message hidden"></div>
 
-            <div class="button-grid">
-              <button id="createRoomButton" class="primary-button" type="button">Create Room</button>
-              <button id="joinRoomButton" class="secondary-button" type="button">Join Room</button>
-              <button id="computerButton" class="secondary-button" type="button">Play Computer</button>
-              <button id="practiceButton" class="secondary-button" type="button">Practice Solo</button>
-              <button id="restartButton" class="secondary-button wide-button" type="button" disabled>Re-Rack</button>
-            </div>
-
-            <div class="pill-row">
-              <span class="pill"><span class="pill-label">Room</span><strong id="roomCode">-</strong></span>
-              <span class="pill"><span class="pill-label">Mode</span><strong id="modeText">Mode</strong></span>
-              <span class="pill"><span class="pill-label">Turn</span><strong id="turnText">Waiting</strong></span>
-              <span class="pill"><span class="pill-label">Table</span><strong id="tableStateText">Open</strong></span>
-            </div>
-
-            <div id="message" class="message info">
-              Pull back from the cue ball to shoot. First legal pocket after the break claims solids or stripes.
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="section-heading compact">
-              <h2>Rules</h2>
-              <p>Built around official-style 8-ball flow.</p>
-            </div>
-            <div class="rules-list">
-              <article class="rule-chip">Open table after the break</article>
-              <article class="rule-chip">First legal suit pocket claims solids or stripes</article>
-              <article class="rule-chip">Keep shooting after pocketing your suit</article>
-              <article class="rule-chip">Clear your suit before attempting the 8-ball</article>
-              <article class="rule-chip">Pocketing the 8 early loses the rack</article>
-            </div>
-          </section>
-
-          <section class="panel">
-            <div class="section-heading compact">
-              <h2>Players</h2>
-              <p>Suit assignments appear here once the table is claimed.</p>
-            </div>
-            <div class="scoreboard" id="scoreboard"></div>
-          </section>
-        </section>
-
-        <section class="panel table-panel">
-          <div class="section-heading compact">
-            <h2>Table</h2>
-            <p>Animated shot playback keeps both players in sync on the same rack.</p>
+        <div id="statusBar" class="status-bar hidden">
+          <div class="stat">
+            <span class="stat-label">Turn</span>
+            <strong id="turnText">—</strong>
           </div>
-          <div class="canvas-frame">
-            <canvas id="tableCanvas" width="960" height="520"></canvas>
+          <div class="stat">
+            <span class="stat-label">Table</span>
+            <strong id="tableStateText">—</strong>
           </div>
-        </section>
+        </div>
+
+        <div id="scoreboard" class="scoreboard"></div>
+
+        <button id="restartButton" class="secondary-button re-rack" type="button" disabled>Re-Rack</button>
+      </aside>
+
+      <main class="table-area">
+        <div class="canvas-wrap">
+          <canvas id="tableCanvas" width="960" height="520"></canvas>
+        </div>
       </main>
     </div>
 

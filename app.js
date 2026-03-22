@@ -6,16 +6,15 @@ const STORAGE_KEYS = {
 
 const nameInput = document.getElementById("nameInput");
 const roomInput = document.getElementById("roomInput");
-const createRoomButton = document.getElementById("createRoomButton");
-const joinRoomButton = document.getElementById("joinRoomButton");
+const onlineButton = document.getElementById("onlineButton");
 const computerButton = document.getElementById("computerButton");
-const practiceButton = document.getElementById("practiceButton");
+const joinRoomButton = document.getElementById("joinRoomButton");
 const restartButton = document.getElementById("restartButton");
 const copyInviteButton = document.getElementById("copyInviteButton");
-const roomHeadline = document.getElementById("roomHeadline");
-const statusText = document.getElementById("statusText");
-const roomCode = document.getElementById("roomCode");
-const modeText = document.getElementById("modeText");
+const modeButtonsDiv = document.getElementById("modeButtons");
+const joinButtonsDiv = document.getElementById("joinButtons");
+const invitePanelDiv = document.getElementById("invitePanel");
+const statusBar = document.getElementById("statusBar");
 const turnText = document.getElementById("turnText");
 const tableStateText = document.getElementById("tableStateText");
 const scoreboard = document.getElementById("scoreboard");
@@ -50,12 +49,10 @@ initialize();
 function initialize() {
   const roomIdFromUrl = new URL(window.location.href).searchParams.get("room");
   nameInput.value = localStorage.getItem(STORAGE_KEYS.name) || "";
-  roomInput.value = roomIdFromUrl || localStorage.getItem(STORAGE_KEYS.roomId) || "";
 
-  createRoomButton.addEventListener("click", () => createRoom("multiplayer"));
-  joinRoomButton.addEventListener("click", joinRoom);
   computerButton.addEventListener("click", () => createRoom("ai"));
-  practiceButton.addEventListener("click", () => createRoom("practice"));
+  onlineButton.addEventListener("click", () => createRoom("multiplayer"));
+  joinRoomButton.addEventListener("click", joinRoom);
   restartButton.addEventListener("click", restartRack);
   copyInviteButton.addEventListener("click", copyInviteLink);
 
@@ -67,8 +64,11 @@ function initialize() {
 
   render();
 
-  if (roomInput.value.trim()) {
-    reconnectToRoom(roomInput.value.trim().toUpperCase());
+  if (roomIdFromUrl) {
+    roomInput.value = roomIdFromUrl.toUpperCase();
+    modeButtonsDiv.classList.add("hidden");
+    joinButtonsDiv.classList.remove("hidden");
+    reconnectToRoom(roomIdFromUrl.toUpperCase());
   }
 }
 
@@ -131,6 +131,8 @@ async function reconnectToRoom(roomId) {
   } catch (_error) {
     localStorage.removeItem(STORAGE_KEYS.roomId);
     updateUrl(null);
+    modeButtonsDiv.classList.remove("hidden");
+    joinButtonsDiv.classList.add("hidden");
   }
 }
 
@@ -148,6 +150,22 @@ function handleJoinedRoom(data) {
   updateUrl(data.roomId);
   connectEventStream(data.roomId);
   syncAnimationState(data, true);
+
+  if (!data.you) {
+    // Fetched state but not seated — keep join button visible
+    modeButtonsDiv.classList.add("hidden");
+    joinButtonsDiv.classList.remove("hidden");
+    invitePanelDiv.classList.add("hidden");
+    statusBar.classList.add("hidden");
+  } else {
+    modeButtonsDiv.classList.add("hidden");
+    joinButtonsDiv.classList.add("hidden");
+    statusBar.classList.remove("hidden");
+    if (data.mode === "multiplayer") {
+      invitePanelDiv.classList.remove("hidden");
+    }
+  }
+
   render();
 }
 
@@ -331,24 +349,10 @@ function render() {
 }
 
 function renderHeader() {
-  roomHeadline.textContent = roomState
-    ? `${roomState.mode === "practice" ? "Practice" : roomState.mode === "ai" ? "CPU Match" : "Online Room"} ${roomState.roomId}`
-    : "No room yet";
-  statusText.textContent = roomState
-    ? roomState.game.statusMessage
-    : "Create a room, copy the link, and let someone join from anywhere this server is reachable.";
-  roomCode.textContent = roomState?.roomId || "-";
-  modeText.textContent = roomState
-    ? roomState.mode === "practice"
-      ? "Practice"
-      : roomState.mode === "ai"
-        ? "CPU"
-        : "Online"
-    : "Mode";
   turnText.textContent = getTurnLabel();
   tableStateText.textContent = getTableStateLabel();
-  copyInviteButton.disabled = !roomState || roomState.mode !== "multiplayer";
   restartButton.disabled = !roomState;
+  copyInviteButton.disabled = !roomState || roomState.mode !== "multiplayer";
 }
 
 function getTurnLabel() {
@@ -382,18 +386,7 @@ function getTableStateLabel() {
 
 function renderScoreboard() {
   if (!roomState) {
-    scoreboard.innerHTML = `
-      <article class="player-card">
-        <div class="player-meta">
-          <span>Multiplayer</span>
-          <strong>Room-based sync</strong>
-        </div>
-        <div class="player-points">
-          <span>Online</span>
-          <strong>Ready</strong>
-        </div>
-      </article>
-    `;
+    scoreboard.innerHTML = "";
     return;
   }
 
@@ -766,16 +759,16 @@ function getInviteUrl(roomId) {
 }
 
 function toggleBusy(nextBusy) {
-  createRoomButton.disabled = nextBusy;
-  joinRoomButton.disabled = nextBusy;
   computerButton.disabled = nextBusy;
-  practiceButton.disabled = nextBusy;
+  onlineButton.disabled = nextBusy;
+  joinRoomButton.disabled = nextBusy;
   restartButton.disabled = nextBusy || !roomState;
 }
 
 function showMessage(text, tone = "info") {
   messageBox.className = `message ${tone}`;
   messageBox.textContent = text;
+  messageBox.classList.remove("hidden");
 }
 
 async function request(url, options = {}) {
