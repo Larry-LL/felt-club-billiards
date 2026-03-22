@@ -554,7 +554,7 @@ function drawBall(ball) {
   ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
 
-  // Stripe band rotates with the ball
+  // Stripe band rotates with the ball's rolling motion
   if (ball.suit === "stripes") {
     ctx.save();
     ctx.beginPath();
@@ -563,20 +563,51 @@ function drawBall(ball) {
     ctx.translate(ball.x, ball.y);
     ctx.rotate(spinAngle);
     ctx.fillStyle = ball.color;
-    ctx.fillRect(-radius, -radius * 0.58, radius * 2, radius * 1.16);
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.fillRect(-radius, -radius * 0.58, radius * 2, 2);
-    ctx.fillRect(-radius, radius * 0.58 - 2, radius * 2, 2);
+    ctx.fillRect(-radius, -radius * 0.62, radius * 2, radius * 1.24);
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillRect(-radius, -radius * 0.62, radius * 2, 2.5);
+    ctx.fillRect(-radius, radius * 0.62 - 2.5, radius * 2, 2.5);
     ctx.restore();
   }
 
-  // Number badge orbits slightly around ball center as it spins
+  // Equator rolling dot — clearly shows rotation direction on solid and 8 balls
+  if (ball.kind === "object" && ball.suit !== "stripes") {
+    const dotRadius = radius * 0.2;
+    const dotX = ball.x + Math.cos(spinAngle) * (radius * 0.68);
+    const dotY = ball.y + Math.sin(spinAngle) * (radius * 0.68);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Rolling dot on cue ball
+  if (ball.id === "cue") {
+    const dotX = ball.x + Math.cos(spinAngle) * radius * 0.55;
+    const dotY = ball.y + Math.sin(spinAngle) * radius * 0.55;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.beginPath();
+    ctx.arc(dotX, dotY, radius * 0.18, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(80,130,200,0.55)";
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Number badge orbits with the rolling spin
   if (ball.kind === "object") {
-    const orbit = radius * 0.25;
+    const orbit = radius * 0.28;
     const bx = ball.x + Math.cos(spinAngle) * orbit;
     const by = ball.y + Math.sin(spinAngle) * orbit;
     ctx.beginPath();
-    ctx.arc(bx, by, radius * 0.44, 0, Math.PI * 2);
+    ctx.arc(bx, by, radius * 0.42, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255,255,255,0.96)";
     ctx.fill();
     ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";

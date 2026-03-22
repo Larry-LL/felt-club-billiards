@@ -502,7 +502,11 @@ function updateBallPositions(balls, delta) {
     ball.y += ball.vy * delta;
     ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
     ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
-    ball.spinAngle = (ball.spinAngle || 0) + Math.hypot(ball.vx, ball.vy) * delta / TABLE.ballRadius;
+    // Physically correct rolling: spin rate is the component of velocity
+    // along the stripe's normal direction, so the stripe rotates with the
+    // motion direction and reverses when the ball reverses.
+    const spin = ball.spinAngle || 0;
+    ball.spinAngle = spin + (ball.vx * Math.sin(spin) + ball.vy * Math.cos(spin)) * delta / TABLE.ballRadius;
 
     if (Math.abs(ball.vx) < TABLE.minVelocity) {
       ball.vx = 0;
