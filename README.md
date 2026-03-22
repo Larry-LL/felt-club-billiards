@@ -1,36 +1,38 @@
-# Felt Club Billiards
+# Felt Club 8-Ball
 
-This is a browser-based multiplayer billiards game you can host locally, share with a friend, and play from a room link.
+Felt Club 8-Ball is a standalone browser-based billiards game with live room links, solo practice, and a computer opponent.
 
-## What It Does
+## Features
 
-- Creates a private room with a short invite code
-- Supports a solo practice table for drills
-- Supports a computer-opponent mode for solo matches
-- Lets a second player join from the same local network or a deployed URL
-- Simulates billiards shots on the server so both players stay in sync
-- Keeps score across the rack
-- Allows either seated player to reset the table for a new game
-- Shows a live aim line and upgraded table/ball rendering
+- Host a live room and let a second player join through the same server
+- Play locally, over your LAN, or online once the server is deployed publicly
+- Practice alone with the same aiming and physics controls
+- Play against `House Bot`
+- Follow 8-ball style rules with an open table, solids, stripes, and 8-ball finish logic
+- Watch shot playback from server-generated physics frames so both players stay in sync
 
 ## Run Locally
 
 ```bash
-cd /Users/lawrence/Desktop/Financial_App/billiards-game
+cd /Users/lawrence/Desktop/Financial_App/felt-club-billiards
 npm install
 npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## How To Play
+## Online Multiplayer
 
-1. Enter your display name and click `Practice Solo` for drills, `Play Computer` for a CPU match, or `Create Room` for multiplayer.
-2. Copy the invite link or send the 5-letter room code to your friend.
-3. Your friend opens the app, enters the code, and clicks `Join Room`.
-4. Move your pointer to preview the aim line, then drag away from the cue ball to control shot power.
-5. First player to pocket 4 colored balls wins the rack.
+Multiplayer works by keeping each room on the Node server and streaming updates to every connected player. If this server is running on a public URL, anyone with the room link can join online and play the same rack in real time.
 
-## Share With Friends
+## Controls
 
-To play over the internet, deploy the app to a public host or run it on a machine your friend can reach and share that URL. The game state is stored in memory, so active rooms reset if the server restarts.
+1. Start your drag on the cue ball.
+2. Pull backward to set direction and power.
+3. Release to shoot.
+4. On multiplayer rooms, copy the room link and send it to the other player.
+
+## Notes
+
+- Room state is kept in memory, so restarting the server resets active games.
+- If `package.json` or `package-lock.json` changes, run `npm install` again.

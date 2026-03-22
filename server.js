@@ -13,10 +13,10 @@ const TABLE = {
   ballRadius: 12,
   pocketRadius: 24,
   pocketCaptureRadius: 16,
-  friction: 0.988,
+  friction: 0.996,
   minVelocity: 0.05,
-  maxShotSpeed: 18,
-  winScore: 4,
+  maxShotSpeed: 12,
+  simulationSubsteps: 4,
   pockets: [
     { x: 22, y: 22 },
     { x: 480, y: 14 },
@@ -26,6 +26,24 @@ const TABLE = {
     { x: 938, y: 498 },
   ],
 };
+
+const BALLS = [
+  { number: 1, suit: "solids", color: "#f7d154" },
+  { number: 2, suit: "solids", color: "#4d7cff" },
+  { number: 3, suit: "solids", color: "#e24b4b" },
+  { number: 4, suit: "solids", color: "#7e57c2" },
+  { number: 5, suit: "solids", color: "#f28a3f" },
+  { number: 6, suit: "solids", color: "#2bb1a8" },
+  { number: 7, suit: "solids", color: "#8d2c2c" },
+  { number: 8, suit: "eight", color: "#111111" },
+  { number: 9, suit: "stripes", color: "#f7d154" },
+  { number: 10, suit: "stripes", color: "#4d7cff" },
+  { number: 11, suit: "stripes", color: "#e24b4b" },
+  { number: 12, suit: "stripes", color: "#7e57c2" },
+  { number: 13, suit: "stripes", color: "#f28a3f" },
+  { number: 14, suit: "stripes", color: "#2bb1a8" },
+  { number: 15, suit: "stripes", color: "#8d2c2c" },
+];
 
 app.use(express.json());
 app.use(express.static(__dirname));
@@ -38,18 +56,13 @@ app.post("/api/rooms", (req, res) => {
   const name = sanitizeName(req.body?.name);
   const playerId = readOrCreatePlayerId(req.body?.playerId);
   const mode = ["practice", "ai"].includes(req.body?.mode) ? req.body.mode : "multiplayer";
-  const room = createRoom({
-    playerId,
-    name,
-    mode,
-  });
+  const room = createRoom({ playerId, name, mode });
 
   res.status(201).json(buildRoomPayload(room, playerId));
 });
 
 app.post("/api/rooms/:roomId/join", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
-
   if (!room) {
     return res.status(404).json({ error: "That room does not exist." });
   }
@@ -60,7 +73,10 @@ app.post("/api/rooms/:roomId/join", (req, res) => {
 
   if (["practice", "ai"].includes(room.mode) && !existingPlayer) {
     return res.status(409).json({
-      error: room.mode === "practice" ? "That table is in solo practice mode." : "That table is reserved for the computer match.",
+      error:
+        room.mode === "practice"
+          ? "That table is in solo practice mode."
+          : "That table is reserved for the computer match.",
     });
   }
 
@@ -68,6 +84,7 @@ app.post("/api/rooms/:roomId/join", (req, res) => {
     existingPlayer.name = name;
     existingPlayer.connected = true;
     existingPlayer.lastSeenAt = Date.now();
+    ensurePlayerGroups(room);
     broadcastRoom(room);
     return res.json(buildRoomPayload(room, playerId));
   }
@@ -79,16 +96,13 @@ app.post("/api/rooms/:roomId/join", (req, res) => {
   room.players.push({
     id: playerId,
     name,
-    score: 0,
     connected: true,
     lastSeenAt: Date.now(),
+    isComputer: false,
   });
+  ensurePlayerGroups(room);
 
-  if (!room.game.currentTurnPlayerId) {
-    room.game.currentTurnPlayerId = room.players[0]?.id || null;
-  }
-
-  room.game.statusMessage = `${room.players[1].name} joined the table. ${room.players[0].name} breaks first.`;
+  room.game.statusMessage = `${room.players[1].name} joined the table. ${room.players[0].name} breaks first on an open table.`;
   room.updatedAt = Date.now();
   broadcastRoom(room);
 
@@ -97,7 +111,6 @@ app.post("/api/rooms/:roomId/join", (req, res) => {
 
 app.get("/api/rooms/:roomId/state", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
-
   if (!room) {
     return res.status(404).json({ error: "That room does not exist." });
   }
@@ -116,7 +129,6 @@ app.get("/api/rooms/:roomId/state", (req, res) => {
 
 app.get("/api/rooms/:roomId/events", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
-
   if (!room) {
     res.status(404).end();
     return;
@@ -148,7 +160,6 @@ app.get("/api/rooms/:roomId/events", (req, res) => {
   req.on("close", () => {
     clearInterval(heartbeat);
     room.clients.delete(client);
-
     if (playerId) {
       const player = room.players.find((entry) => entry.id === playerId);
       if (player) {
@@ -162,7 +173,6 @@ app.get("/api/rooms/:roomId/events", (req, res) => {
 
 app.post("/api/rooms/:roomId/shots", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
-
   if (!room) {
     return res.status(404).json({ error: "That room does not exist." });
   }
@@ -176,28 +186,28 @@ app.post("/api/rooms/:roomId/shots", (req, res) => {
     return res.status(403).json({ error: "You are not seated at this table." });
   }
 
-  if (room.mode !== "practice" && room.players.length < 2) {
+  if (room.mode === "multiplayer" && room.players.length < 2) {
     return res.status(409).json({ error: "Invite a friend before taking the first shot." });
   }
 
   if (room.game.winnerId) {
-    return res.status(409).json({ error: "The rack is over. Start a new one." });
+    return res.status(409).json({ error: "The rack is already over. Start a new one." });
   }
 
   if (room.game.currentTurnPlayerId !== playerId) {
     return res.status(409).json({ error: "It is not your turn yet." });
   }
 
-  if (room.game.isSimulating) {
-    return res.status(409).json({ error: "A shot is already in progress." });
+  if (room.game.isSimulating || room.game.isAiThinking) {
+    return res.status(409).json({ error: "The current shot is still resolving." });
   }
 
   if (!Number.isFinite(angle) || !Number.isFinite(power) || power <= 0) {
     return res.status(400).json({ error: "That shot power was invalid." });
   }
 
-  const cueBall = room.game.balls.find((ball) => ball.id === "cue");
-  if (!cueBall || cueBall.pocketed) {
+  const cueBall = room.game.balls.find((ball) => ball.id === "cue" && !ball.pocketed);
+  if (!cueBall) {
     return res.status(409).json({ error: "The cue ball is being reset. Try again in a second." });
   }
 
@@ -209,7 +219,7 @@ app.post("/api/rooms/:roomId/shots", (req, res) => {
 
   const outcome = runSimulation(room, playerId);
   room.game.isSimulating = false;
-  updateTurnAndScore(room, playerId, outcome);
+  applyEightBallRules(room, playerId, outcome);
   room.updatedAt = Date.now();
   broadcastRoom(room);
   maybeQueueComputerTurn(room);
@@ -219,28 +229,23 @@ app.post("/api/rooms/:roomId/shots", (req, res) => {
 
 app.post("/api/rooms/:roomId/restart", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
-
   if (!room) {
     return res.status(404).json({ error: "That room does not exist." });
   }
 
   const playerId = String(req.body?.playerId || "");
   const player = room.players.find((entry) => entry.id === playerId);
-
   if (!player) {
     return res.status(403).json({ error: "Only seated players can restart the game." });
   }
 
-  room.players.forEach((entry) => {
-    entry.score = 0;
-  });
-  room.game = createInitialGame(room.players[0]?.id || null, room.mode);
+  room.game = createInitialGame(room.players[0]?.id || null, room.mode, room.players);
   room.game.statusMessage =
     room.mode === "practice"
       ? `${player.name} reset the solo practice rack. Shoot whenever you are ready.`
       : room.mode === "ai"
-        ? `${player.name} reset the rack. You break first against the house bot.`
-      : `${player.name} reset the rack. ${room.players[0]?.name || "Player 1"} breaks first.`;
+        ? `${player.name} reset the rack. You break first against House Bot on an open table.`
+        : `${player.name} reset the rack. ${room.players[0]?.name || "Player 1"} breaks first on an open table.`;
   room.updatedAt = Date.now();
   broadcastRoom(room);
 
@@ -253,7 +258,6 @@ app.get(/.*/, (_req, res) => {
 
 setInterval(() => {
   const cutoff = Date.now() - 1000 * 60 * 60 * 8;
-
   for (const [roomId, room] of rooms.entries()) {
     if (room.updatedAt < cutoff && room.clients.size === 0) {
       if (room.aiTimeout) {
@@ -274,7 +278,6 @@ function createRoom({ playerId, name, mode }) {
     {
       id: playerId,
       name,
-      score: 0,
       connected: true,
       lastSeenAt: Date.now(),
       isComputer: false,
@@ -285,7 +288,6 @@ function createRoom({ playerId, name, mode }) {
     players.push({
       id: `cpu-${roomId}`,
       name: "House Bot",
-      score: 0,
       connected: true,
       lastSeenAt: Date.now(),
       isComputer: true,
@@ -300,32 +302,35 @@ function createRoom({ playerId, name, mode }) {
     players,
     clients: new Set(),
     aiTimeout: null,
-    game: createInitialGame(playerId, mode),
+    game: createInitialGame(playerId, mode, players),
   };
 
   room.game.statusMessage =
     mode === "practice"
-      ? `${name} opened a solo practice table. Shoot anytime and reset the rack whenever you want.`
+      ? `${name} opened a solo practice table. The rack is open and you can shoot anytime.`
       : mode === "ai"
-        ? `${name} opened a match against the house bot. Break and see if you can win the rack.`
-      : `${name} opened the room. Share the code and wait for a challenger.`;
+        ? `${name} opened an 8-ball match against House Bot. You break first on an open table.`
+        : `${name} opened an 8-ball room. Share the link and wait for a challenger.`;
   rooms.set(roomId, room);
   return room;
 }
 
-function createInitialGame(firstPlayerId, mode) {
+function createInitialGame(firstPlayerId, mode, players) {
   return {
     table: TABLE,
     mode,
     balls: createRack(),
     currentTurnPlayerId: firstPlayerId,
     winnerId: null,
+    winnerReason: null,
     isSimulating: false,
     isAiThinking: false,
     shotId: 0,
     lastShotFrames: [],
     shotCount: 0,
-    statusMessage: "Line up your break shot.",
+    openTable: true,
+    playerGroups: Object.fromEntries((players || []).map((player) => [player.id, null])),
+    statusMessage: "Open table. Break and claim solids or stripes.",
   };
 }
 
@@ -335,11 +340,13 @@ function createRack() {
   const startX = 690;
   const startY = TABLE.height / 2;
   const spacing = TABLE.ballRadius * 2 + 1;
-  const colors = ["#f4d35e", "#ee964b", "#f95738", "#7fb069", "#4d9de0", "#7768ae", "#f25f5c"];
+  const order = [1, 10, 3, 12, 8, 14, 7, 9, 5, 2, 15, 6, 11, 4, 13];
   const balls = [
     {
       id: "cue",
       label: "Cue",
+      number: 0,
+      suit: "cue",
       color: "#f8f4ea",
       x: cueX,
       y: cueY,
@@ -354,13 +361,16 @@ function createRack() {
     },
   ];
 
-  let colorIndex = 0;
-  for (let row = 0; row < 3; row += 1) {
+  let rackIndex = 0;
+  for (let row = 0; row < 5; row += 1) {
     for (let col = 0; col <= row; col += 1) {
+      const spec = BALLS.find((ball) => ball.number === order[rackIndex]);
       balls.push({
-        id: `object-${row}-${col}`,
-        label: String(colorIndex + 1),
-        color: colors[colorIndex % colors.length],
+        id: `ball-${spec.number}`,
+        label: String(spec.number),
+        number: spec.number,
+        suit: spec.suit,
+        color: spec.color,
         x: startX + row * spacing,
         y: startY - (row * spacing) / 2 + col * spacing,
         vx: 0,
@@ -372,7 +382,7 @@ function createRack() {
         pocketTargetY: null,
         kind: "object",
       });
-      colorIndex += 1;
+      rackIndex += 1;
     }
   }
 
@@ -381,21 +391,25 @@ function createRack() {
 
 function runSimulation(room, playerId) {
   const outcome = {
-    scorerId: playerId,
-    objectBallsPocketed: 0,
+    shooterId: playerId,
+    firstContactNumber: null,
+    railContacts: 0,
     cueScratch: false,
+    pocketedNumbers: [],
+    eightBallPocketed: false,
+    countsBefore: countRemainingBySuit(room.game.balls),
   };
   const frames = [captureBalls(room.game.balls)];
 
   for (let frame = 0; frame < 1600; frame += 1) {
-    updateBallPositions(room.game.balls);
-    resolveWallCollisions(room.game.balls);
-    resolveBallCollisions(room.game.balls);
-    detectPockets(room.game.balls, outcome);
-
-    if (frame % 2 === 0) {
-      frames.push(captureBalls(room.game.balls));
+    for (let step = 0; step < TABLE.simulationSubsteps; step += 1) {
+      updateBallPositions(room.game.balls, 1 / TABLE.simulationSubsteps);
+      resolveWallCollisions(room.game.balls, outcome);
+      resolveBallCollisions(room.game.balls, outcome);
+      detectPockets(room.game.balls, outcome);
     }
+
+    frames.push(captureBalls(room.game.balls));
 
     if (!hasMovingBalls(room.game.balls)) {
       break;
@@ -426,6 +440,8 @@ function captureBalls(balls) {
   return balls.map((ball) => ({
     id: ball.id,
     label: ball.label,
+    number: ball.number,
+    suit: ball.suit,
     color: ball.color,
     x: ball.x,
     y: ball.y,
@@ -457,14 +473,14 @@ function compressFrames(frames) {
   return compact;
 }
 
-function updateBallPositions(balls) {
+function updateBallPositions(balls, delta) {
   for (const ball of balls) {
     if (ball.pocketed) {
       continue;
     }
 
     if (ball.sinking) {
-      ball.sinkProgress = Math.min(ball.sinkProgress + 0.12, 1);
+      ball.sinkProgress = Math.min(ball.sinkProgress + 0.12 * TABLE.simulationSubsteps * delta, 1);
       ball.x += (ball.pocketTargetX - ball.x) * 0.38;
       ball.y += (ball.pocketTargetY - ball.y) * 0.38;
       ball.vx = 0;
@@ -476,14 +492,13 @@ function updateBallPositions(balls) {
         ball.x = ball.pocketTargetX;
         ball.y = ball.pocketTargetY;
       }
-
       continue;
     }
 
-    ball.x += ball.vx;
-    ball.y += ball.vy;
-    ball.vx *= TABLE.friction;
-    ball.vy *= TABLE.friction;
+    ball.x += ball.vx * delta;
+    ball.y += ball.vy * delta;
+    ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
+    ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
 
     if (Math.abs(ball.vx) < TABLE.minVelocity) {
       ball.vx = 0;
@@ -494,40 +509,40 @@ function updateBallPositions(balls) {
   }
 }
 
-function resolveWallCollisions(balls) {
+function resolveWallCollisions(balls, outcome) {
   const minX = TABLE.ballRadius;
   const maxX = TABLE.width - TABLE.ballRadius;
   const minY = TABLE.ballRadius;
   const maxY = TABLE.height - TABLE.ballRadius;
 
   for (const ball of balls) {
-    if (ball.pocketed) {
-      continue;
-    }
-
-    if (ball.sinking) {
+    if (ball.pocketed || ball.sinking) {
       continue;
     }
 
     if (ball.x < minX) {
       ball.x = minX;
       ball.vx *= -0.94;
+      outcome.railContacts += 1;
     } else if (ball.x > maxX) {
       ball.x = maxX;
       ball.vx *= -0.94;
+      outcome.railContacts += 1;
     }
 
     if (ball.y < minY) {
       ball.y = minY;
       ball.vy *= -0.94;
+      outcome.railContacts += 1;
     } else if (ball.y > maxY) {
       ball.y = maxY;
       ball.vy *= -0.94;
+      outcome.railContacts += 1;
     }
   }
 }
 
-function resolveBallCollisions(balls) {
+function resolveBallCollisions(balls, outcome) {
   for (let i = 0; i < balls.length; i += 1) {
     for (let j = i + 1; j < balls.length; j += 1) {
       const a = balls[i];
@@ -541,9 +556,16 @@ function resolveBallCollisions(balls) {
       const dy = b.y - a.y;
       const distance = Math.hypot(dx, dy);
       const minDistance = TABLE.ballRadius * 2;
-
       if (distance === 0 || distance >= minDistance) {
         continue;
+      }
+
+      if (!outcome.firstContactNumber) {
+        if (a.id === "cue" && b.kind === "object") {
+          outcome.firstContactNumber = b.number;
+        } else if (b.id === "cue" && a.kind === "object") {
+          outcome.firstContactNumber = a.number;
+        }
       }
 
       const nx = dx / distance;
@@ -559,7 +581,6 @@ function resolveBallCollisions(balls) {
       const dvx = b.vx - a.vx;
       const dvy = b.vy - a.vy;
       const velocityAlongNormal = dvx * nx + dvy * ny;
-
       if (velocityAlongNormal > 0) {
         continue;
       }
@@ -586,20 +607,38 @@ function detectPockets(balls, outcome) {
 
       ball.sinking = true;
       ball.sinkProgress = 0;
-      ball.pocketTargetX = pocket.x;
-      ball.pocketTargetY = pocket.y;
-      ball.vx *= 0.2;
-      ball.vy *= 0.2;
+      const sinkTarget = getPocketSinkTarget(pocket);
+      ball.pocketTargetX = sinkTarget.x;
+      ball.pocketTargetY = sinkTarget.y;
+      ball.vx = 0;
+      ball.vy = 0;
 
       if (ball.kind === "cue") {
         outcome.cueScratch = true;
       } else {
-        outcome.objectBallsPocketed += 1;
+        outcome.pocketedNumbers.push(ball.number);
+        if (ball.number === 8) {
+          outcome.eightBallPocketed = true;
+        }
       }
 
       break;
     }
   }
+}
+
+function getPocketSinkTarget(pocket) {
+  const centerX = TABLE.width / 2;
+  const centerY = TABLE.height / 2;
+  const dx = centerX - pocket.x;
+  const dy = centerY - pocket.y;
+  const distance = Math.hypot(dx, dy) || 1;
+  const inset = TABLE.ballRadius * 0.9;
+
+  return {
+    x: pocket.x + (dx / distance) * inset,
+    y: pocket.y + (dy / distance) * inset,
+  };
 }
 
 function respotCueBall(balls) {
@@ -627,71 +666,143 @@ function hasMovingBalls(balls) {
   );
 }
 
-function updateTurnAndScore(room, playerId, outcome) {
+function applyEightBallRules(room, playerId, outcome) {
   room.game.shotCount += 1;
+  ensurePlayerGroups(room);
+
   const shooter = room.players.find((player) => player.id === playerId);
   const opponent = room.players.find((player) => player.id !== playerId) || null;
-  const isPractice = room.mode === "practice";
+  const shooterGroup = room.game.playerGroups[shooter.id];
+  const opponentGroup = opponent ? room.game.playerGroups[opponent.id] : null;
+  const madeAnyBall = outcome.pocketedNumbers.length > 0;
+  const firstHitBall = getNumberBall(outcome.firstContactNumber);
+  const legalTarget = determineLegalTarget(room, shooter.id, outcome.countsBefore);
+  const legalFirstContact =
+    room.mode === "practice"
+      ? Boolean(firstHitBall)
+      : legalTarget === "any-non-eight"
+        ? Boolean(firstHitBall) && firstHitBall.suit !== "eight"
+        : legalTarget === "eight"
+          ? outcome.firstContactNumber === 8
+          : Boolean(firstHitBall) && firstHitBall.suit === legalTarget;
+  const legalShot = legalFirstContact && (madeAnyBall || outcome.railContacts > 0);
+  const pocketedSuits = outcome.pocketedNumbers
+    .map(getNumberBall)
+    .filter(Boolean)
+    .map((ball) => ball.suit);
 
-  if (!shooter) {
+  if (room.mode === "practice") {
+    room.game.currentTurnPlayerId = shooter.id;
+    room.game.statusMessage =
+      outcome.cueScratch
+        ? `${shooter.name} scratched. Cue ball respotted for the next practice shot.`
+        : madeAnyBall
+          ? `${shooter.name} pocketed ${madeAnyBall ? outcome.pocketedNumbers.length : 0} ball${
+              outcome.pocketedNumbers.length === 1 ? "" : "s"
+            }. Practice continues.`
+          : `${shooter.name} missed. Reset your angle and try another practice shot.`;
     return;
   }
 
-  shooter.score += outcome.objectBallsPocketed;
-
-  if (shooter.score >= TABLE.winScore) {
-    room.game.winnerId = shooter.id;
-    room.game.statusMessage = `${shooter.name} cleared ${TABLE.winScore} balls and wins the rack.`;
-    return;
-  }
-
-  const remainingObjects = room.game.balls.filter(
-    (ball) => ball.kind === "object" && !ball.pocketed
-  ).length;
-
-  if (remainingObjects === 0) {
-    const winner = room.players.reduce((best, player) => {
-      if (!best || player.score > best.score) {
-        return player;
-      }
-      return best;
-    }, null);
+  if (outcome.eightBallPocketed) {
+    const canShootEight = legalTarget === "eight";
+    const winsRack = canShootEight && legalShot && !outcome.cueScratch;
+    const winner = winsRack ? shooter : opponent;
 
     room.game.winnerId = winner?.id || null;
-    room.game.statusMessage = winner
-      ? `${winner.name} wins on points with ${winner.score} pocketed balls.`
-      : "Rack complete.";
+    room.game.winnerReason = winsRack
+      ? `${shooter.name} legally pocketed the 8-ball.`
+      : `${shooter.name} lost by pocketing the 8-ball early or scratching on it.`;
+    room.game.statusMessage = winsRack
+      ? `${shooter.name} wins by sinking the 8-ball.`
+      : `${winner?.name || "Opponent"} wins after an illegal 8-ball result.`;
     return;
   }
 
-  if (outcome.cueScratch) {
-    room.game.currentTurnPlayerId = isPractice ? shooter.id : opponent?.id || playerId;
-    room.game.statusMessage = isPractice
-      ? `${shooter.name} scratched. Cue ball respotted for the next practice shot.`
-      : opponent?.isComputer
-        ? `${shooter.name} scratched. House Bot is lining up a response.`
-      : `${shooter.name} scratched. ${opponent?.name || "Opponent"} is up.`;
+  let assignedThisShot = false;
+  if (room.game.openTable && legalShot) {
+    const claimSuit = pocketedSuits.find((suit) => suit === "solids" || suit === "stripes") || null;
+    if (claimSuit && opponent) {
+      room.game.playerGroups[shooter.id] = claimSuit;
+      room.game.playerGroups[opponent.id] = claimSuit === "solids" ? "stripes" : "solids";
+      room.game.openTable = false;
+      assignedThisShot = true;
+    }
+  }
+
+  const effectiveShooterGroup = room.game.playerGroups[shooter.id];
+  const madeOwnBall = effectiveShooterGroup
+    ? pocketedSuits.some((suit) => suit === effectiveShooterGroup)
+    : false;
+
+  if (outcome.cueScratch || !legalShot) {
+    room.game.currentTurnPlayerId = opponent?.id || shooter.id;
+    room.game.statusMessage = outcome.cueScratch
+      ? `${shooter.name} scratched. ${opponent?.name || "Opponent"} takes ball-in-hand style advantage.`
+      : `${shooter.name} committed a foul. ${opponent?.name || "Opponent"} is up next.`;
     return;
   }
 
-  if (outcome.objectBallsPocketed > 0) {
+  if (assignedThisShot && opponent) {
     room.game.currentTurnPlayerId = shooter.id;
-    room.game.statusMessage = `${shooter.name} pocketed ${outcome.objectBallsPocketed} ball${
-      outcome.objectBallsPocketed === 1 ? "" : "s"
-    } and keeps the turn.`;
+    room.game.statusMessage = `${shooter.name} claims ${room.game.playerGroups[shooter.id]} and keeps shooting.`;
     return;
   }
 
-  room.game.currentTurnPlayerId = isPractice ? shooter.id : opponent?.id || playerId;
-  room.game.statusMessage = isPractice
-    ? `${shooter.name} missed. Reset your angle and try another practice shot.`
-    : opponent?.isComputer
-      ? `${shooter.name} missed. House Bot is reading the table.`
-    : `${shooter.name} missed. ${opponent?.name || "Opponent"} takes the next shot.`;
+  if (madeOwnBall) {
+    room.game.currentTurnPlayerId = shooter.id;
+    room.game.statusMessage = `${shooter.name} pocketed a ${effectiveShooterGroup.slice(0, -1)} ball and stays at the table.`;
+    return;
+  }
+
+  room.game.currentTurnPlayerId = opponent?.id || shooter.id;
+  room.game.statusMessage = room.game.openTable
+    ? `${shooter.name} leaves the table open. ${opponent?.name || "Opponent"} shoots next.`
+    : `${shooter.name} did not pocket a scoring ball. ${opponent?.name || "Opponent"} is up.`;
+}
+
+function determineLegalTarget(room, playerId, countsBefore) {
+  if (room.mode === "practice") {
+    return "any-non-eight";
+  }
+
+  const assignedGroup = room.game.playerGroups[playerId];
+  if (!assignedGroup || room.game.openTable) {
+    return "any-non-eight";
+  }
+
+  return countsBefore[assignedGroup] === 0 ? "eight" : assignedGroup;
+}
+
+function countRemainingBySuit(balls) {
+  return {
+    solids: balls.filter((ball) => ball.suit === "solids" && !ball.pocketed).length,
+    stripes: balls.filter((ball) => ball.suit === "stripes" && !ball.pocketed).length,
+  };
+}
+
+function getNumberBall(number) {
+  return BALLS.find((ball) => ball.number === number) || null;
+}
+
+function ensurePlayerGroups(room) {
+  const groups = room.game.playerGroups || {};
+  room.players.forEach((player) => {
+    if (!(player.id in groups)) {
+      groups[player.id] = null;
+    }
+  });
+  room.game.playerGroups = groups;
 }
 
 function maybeQueueComputerTurn(room) {
-  if (room.mode !== "ai" || room.game.winnerId || room.game.currentTurnPlayerId !== room.players[1]?.id) {
+  const computer = room.players.find((player) => player.isComputer);
+  if (
+    room.mode !== "ai" ||
+    !computer ||
+    room.game.winnerId ||
+    room.game.currentTurnPlayerId !== computer.id
+  ) {
     return;
   }
 
@@ -703,60 +814,68 @@ function maybeQueueComputerTurn(room) {
   broadcastRoom(room);
   room.aiTimeout = setTimeout(() => {
     room.aiTimeout = null;
-    runComputerTurn(room);
-  }, 900);
+    runComputerTurn(room, computer);
+  }, 950);
 }
 
-function runComputerTurn(room) {
-  const computer = room.players.find((player) => player.isComputer);
+function runComputerTurn(room, computer) {
   const cueBall = room.game.balls.find((ball) => ball.id === "cue" && !ball.pocketed);
-
-  if (!computer || room.game.winnerId || room.game.currentTurnPlayerId !== computer.id || !cueBall) {
+  if (!cueBall || room.game.winnerId || room.game.currentTurnPlayerId !== computer.id) {
     room.game.isAiThinking = false;
     broadcastRoom(room);
     return;
   }
 
-  const shot = chooseComputerShot(room.game.balls, cueBall);
+  const shot = chooseComputerShot(room, cueBall, computer.id);
   cueBall.vx = Math.cos(shot.angle) * TABLE.maxShotSpeed * shot.power;
   cueBall.vy = Math.sin(shot.angle) * TABLE.maxShotSpeed * shot.power;
   room.game.isAiThinking = false;
   room.game.isSimulating = true;
-  room.updatedAt = Date.now();
 
   const outcome = runSimulation(room, computer.id);
   room.game.isSimulating = false;
-  updateTurnAndScore(room, computer.id, outcome);
+  applyEightBallRules(room, computer.id, outcome);
   room.updatedAt = Date.now();
   broadcastRoom(room);
   maybeQueueComputerTurn(room);
 }
 
-function chooseComputerShot(balls, cueBall) {
-  const targets = balls
-    .filter((ball) => ball.kind === "object" && !ball.pocketed)
+function chooseComputerShot(room, cueBall, playerId) {
+  const legalTarget = determineLegalTarget(room, playerId, countRemainingBySuit(room.game.balls));
+  const targets = room.game.balls
+    .filter((ball) => {
+      if (ball.kind !== "object" || ball.pocketed) {
+        return false;
+      }
+      if (legalTarget === "any-non-eight") {
+        return ball.number !== 8;
+      }
+      if (legalTarget === "eight") {
+        return ball.number === 8;
+      }
+      return ball.suit === legalTarget;
+    })
     .sort((a, b) => {
-      const aDistance = Math.hypot(a.x - cueBall.x, a.y - cueBall.y);
-      const bDistance = Math.hypot(b.x - cueBall.x, b.y - cueBall.y);
-      return aDistance - bDistance;
+      const da = Math.hypot(a.x - cueBall.x, a.y - cueBall.y);
+      const db = Math.hypot(b.x - cueBall.x, b.y - cueBall.y);
+      return da - db;
     });
 
   const target = targets[0];
   if (!target) {
-    return { angle: 0, power: 0.4 };
+    return { angle: 0, power: 0.5 };
   }
 
-  const baseAngle = Math.atan2(target.y - cueBall.y, target.x - cueBall.x);
-  const noise = (Math.random() - 0.5) * 0.28;
+  const angle = Math.atan2(target.y - cueBall.y, target.x - cueBall.x) + (Math.random() - 0.5) * 0.18;
   const distance = Math.hypot(target.x - cueBall.x, target.y - cueBall.y);
-
   return {
-    angle: baseAngle + noise,
-    power: clamp(distance / 260 + 0.2 + Math.random() * 0.08, 0.28, 0.92),
+    angle,
+    power: clamp(distance / 280 + 0.22, 0.28, 0.88),
   };
 }
 
 function buildRoomPayload(room, playerId) {
+  ensurePlayerGroups(room);
   return {
     roomId: room.id,
     mode: room.mode,
@@ -764,16 +883,19 @@ function buildRoomPayload(room, playerId) {
     players: room.players.map((player) => ({
       id: player.id,
       name: player.name,
-      score: player.score,
       connected: player.connected,
       isComputer: Boolean(player.isComputer),
+      group: room.game.playerGroups[player.id],
     })),
     game: {
       table: room.game.table,
       mode: room.game.mode,
       balls: room.game.balls,
+      openTable: room.game.openTable,
+      playerGroups: room.game.playerGroups,
       currentTurnPlayerId: room.game.currentTurnPlayerId,
       winnerId: room.game.winnerId,
+      winnerReason: room.game.winnerReason,
       isSimulating: room.game.isSimulating,
       isAiThinking: room.game.isAiThinking,
       shotId: room.game.shotId,
@@ -785,31 +907,7 @@ function buildRoomPayload(room, playerId) {
 }
 
 function broadcastRoom(room) {
-  const payload = JSON.stringify({
-    roomId: room.id,
-    mode: room.mode,
-    players: room.players.map((player) => ({
-      id: player.id,
-      name: player.name,
-      score: player.score,
-      connected: player.connected,
-      isComputer: Boolean(player.isComputer),
-    })),
-    game: {
-      table: room.game.table,
-      mode: room.game.mode,
-      balls: room.game.balls,
-      currentTurnPlayerId: room.game.currentTurnPlayerId,
-      winnerId: room.game.winnerId,
-      isSimulating: room.game.isSimulating,
-      isAiThinking: room.game.isAiThinking,
-      shotId: room.game.shotId,
-      lastShotFrames: room.game.lastShotFrames,
-      shotCount: room.game.shotCount,
-      statusMessage: room.game.statusMessage,
-    },
-  });
-
+  const payload = JSON.stringify(buildRoomPayload(room, null));
   for (const client of room.clients) {
     client.res.write(`data: ${payload}\n\n`);
   }
@@ -824,7 +922,6 @@ function generateRoomId() {
   do {
     roomId = Math.random().toString(36).slice(2, 7).toUpperCase();
   } while (rooms.has(roomId));
-
   return roomId;
 }
 

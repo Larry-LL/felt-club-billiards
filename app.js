@@ -7,17 +7,17 @@ const STORAGE_KEYS = {
 const nameInput = document.getElementById("nameInput");
 const roomInput = document.getElementById("roomInput");
 const createRoomButton = document.getElementById("createRoomButton");
+const joinRoomButton = document.getElementById("joinRoomButton");
 const computerButton = document.getElementById("computerButton");
 const practiceButton = document.getElementById("practiceButton");
-const joinRoomButton = document.getElementById("joinRoomButton");
 const restartButton = document.getElementById("restartButton");
 const copyInviteButton = document.getElementById("copyInviteButton");
 const roomHeadline = document.getElementById("roomHeadline");
 const statusText = document.getElementById("statusText");
 const roomCode = document.getElementById("roomCode");
-const turnText = document.getElementById("turnText");
-const shotCount = document.getElementById("shotCount");
 const modeText = document.getElementById("modeText");
+const turnText = document.getElementById("turnText");
+const tableStateText = document.getElementById("tableStateText");
 const scoreboard = document.getElementById("scoreboard");
 const messageBox = document.getElementById("message");
 const canvas = document.getElementById("tableCanvas");
@@ -36,13 +36,13 @@ let roomState = null;
 let playerId = localStorage.getItem(STORAGE_KEYS.playerId) || "";
 let eventSource = null;
 let displayedBalls = null;
-let animationFrameId = 0;
 let animatedShotId = 0;
+let animationTimer = 0;
 let aimState = {
   active: false,
   hover: false,
-  pointerX: 0,
-  pointerY: 0,
+  x: 0,
+  y: 0,
 };
 
 initialize();
@@ -53,15 +53,15 @@ function initialize() {
   roomInput.value = roomIdFromUrl || localStorage.getItem(STORAGE_KEYS.roomId) || "";
 
   createRoomButton.addEventListener("click", () => createRoom("multiplayer"));
+  joinRoomButton.addEventListener("click", joinRoom);
   computerButton.addEventListener("click", () => createRoom("ai"));
   practiceButton.addEventListener("click", () => createRoom("practice"));
-  joinRoomButton.addEventListener("click", joinRoom);
   restartButton.addEventListener("click", restartRack);
   copyInviteButton.addEventListener("click", copyInviteLink);
 
   canvas.addEventListener("pointerdown", beginAim);
-  canvas.addEventListener("pointermove", trackPointer);
-  canvas.addEventListener("pointerleave", clearAimPreview);
+  canvas.addEventListener("pointermove", moveAim);
+  canvas.addEventListener("pointerleave", clearAim);
   window.addEventListener("pointerup", releaseAim);
   window.addEventListener("beforeunload", closeEventStream);
 
@@ -73,26 +73,23 @@ function initialize() {
 }
 
 async function createRoom(mode) {
-  const name = getPlayerName();
   toggleBusy(true);
-
   try {
     const data = await request("/api/rooms", {
       method: "POST",
       body: JSON.stringify({
-        name,
+        name: getPlayerName(),
         playerId,
         mode,
       }),
     });
-
     handleJoinedRoom(data);
     showMessage(
       mode === "practice"
-        ? "Practice table ready. You can shoot immediately."
+        ? "Practice table ready. Open table rules are shown, but practice never ends the rack."
         : mode === "ai"
-          ? "Computer match ready. Break first and the house bot will answer automatically."
-        : "Room created. Send the invite link to your friend.",
+          ? "Computer room ready. House Bot follows the same 8-ball rules."
+          : "Room created. Copy the room link and send it to the other player.",
       "success"
     );
   } catch (error) {
@@ -110,7 +107,6 @@ async function joinRoom() {
   }
 
   toggleBusy(true);
-
   try {
     const data = await request(`/api/rooms/${roomId}/join`, {
       method: "POST",
@@ -119,9 +115,8 @@ async function joinRoom() {
         playerId,
       }),
     });
-
     handleJoinedRoom(data);
-    showMessage("You joined the table. Line up your first shot when your turn arrives.", "success");
+    showMessage("Joined the room. The rack is live and synced through this server.", "success");
   } catch (error) {
     showMessage(error.message, "error");
   } finally {
@@ -134,7 +129,6 @@ async function reconnectToRoom(roomId) {
     const data = await request(`/api/rooms/${roomId}/state?playerId=${encodeURIComponent(playerId)}`);
     handleJoinedRoom(data);
   } catch (_error) {
-    showMessage("That saved room is no longer available. Create a new one to play.", "error");
     localStorage.removeItem(STORAGE_KEYS.roomId);
     updateUrl(null);
   }
@@ -153,17 +147,13 @@ function handleJoinedRoom(data) {
   localStorage.setItem(STORAGE_KEYS.roomId, data.roomId);
   updateUrl(data.roomId);
   connectEventStream(data.roomId);
-  syncAnimationState(data);
+  syncAnimationState(data, true);
   render();
 }
 
 function connectEventStream(roomId) {
   closeEventStream();
-
-  eventSource = new EventSource(
-    `/api/rooms/${roomId}/events?playerId=${encodeURIComponent(playerId)}`
-  );
-
+  eventSource = new EventSource(`/api/rooms/${roomId}/events?playerId=${encodeURIComponent(playerId)}`);
   eventSource.onmessage = (event) => {
     const payload = JSON.parse(event.data);
     roomState = {
@@ -172,10 +162,6 @@ function connectEventStream(roomId) {
     };
     syncAnimationState(roomState);
     render();
-  };
-
-  eventSource.onerror = () => {
-    statusText.textContent = "Trying to reconnect to the room...";
   };
 }
 
@@ -208,13 +194,12 @@ async function restartRack() {
 }
 
 async function copyInviteLink() {
-  if (!roomState) {
+  if (!roomState || roomState.mode !== "multiplayer") {
     return;
   }
 
-  const inviteUrl = getInviteUrl(roomState.roomId);
-  await navigator.clipboard.writeText(inviteUrl);
-  showMessage("Invite link copied. Send it to your friend.", "success");
+  await navigator.clipboard.writeText(getInviteUrl(roomState.roomId));
+  showMessage("Room link copied. Anyone who can reach this server URL can join that room.", "success");
 }
 
 function beginAim(event) {
@@ -228,19 +213,18 @@ function beginAim(event) {
   }
 
   const point = getCanvasPoint(event);
-  const distance = Math.hypot(point.x - cueBall.x, point.y - cueBall.y);
-  if (distance > 60) {
+  if (Math.hypot(point.x - cueBall.x, point.y - cueBall.y) > 64) {
     return;
   }
 
   aimState.active = true;
   aimState.hover = true;
-  aimState.pointerX = point.x;
-  aimState.pointerY = point.y;
+  aimState.x = point.x;
+  aimState.y = point.y;
   render();
 }
 
-function trackPointer(event) {
+function moveAim(event) {
   if (!roomState || !canShoot()) {
     aimState.hover = false;
     if (!aimState.active) {
@@ -251,12 +235,12 @@ function trackPointer(event) {
 
   const point = getCanvasPoint(event);
   aimState.hover = true;
-  aimState.pointerX = point.x;
-  aimState.pointerY = point.y;
+  aimState.x = point.x;
+  aimState.y = point.y;
   render();
 }
 
-function clearAimPreview() {
+function clearAim() {
   aimState.hover = false;
   if (!aimState.active) {
     render();
@@ -282,8 +266,8 @@ async function releaseAim(event) {
     return;
   }
 
+  toggleBusy(true);
   try {
-    toggleBusy(true);
     const data = await request(`/api/rooms/${roomState.roomId}/shots`, {
       method: "POST",
       body: JSON.stringify({
@@ -292,7 +276,6 @@ async function releaseAim(event) {
         power: dragDistance / 190,
       }),
     });
-
     roomState = data;
     syncAnimationState(roomState);
     render();
@@ -304,28 +287,22 @@ async function releaseAim(event) {
 }
 
 function canShoot() {
-  if (!roomState || !roomState.you) {
-    return false;
-  }
-
-  return (
-    roomState.game.currentTurnPlayerId === playerId &&
-    !roomState.game.winnerId &&
-    !roomState.game.isSimulating &&
-    !roomState.game.isAiThinking
+  return Boolean(
+    roomState &&
+      roomState.you &&
+      roomState.game.currentTurnPlayerId === playerId &&
+      !roomState.game.winnerId &&
+      !roomState.game.isSimulating &&
+      !roomState.game.isAiThinking
   );
 }
 
-function isPracticeMode() {
-  return roomState?.mode === "practice";
-}
-
-function isComputerMode() {
-  return roomState?.mode === "ai";
-}
-
 function getCueBall() {
-  return getRenderedBalls().find((ball) => ball.id === "cue" && !ball.pocketed) || null;
+  return getDisplayedBalls().find((ball) => ball.id === "cue" && !ball.pocketed) || null;
+}
+
+function getDisplayedBalls() {
+  return displayedBalls || roomState?.game?.balls || [];
 }
 
 function getAimVector() {
@@ -334,18 +311,15 @@ function getAimVector() {
     return null;
   }
 
-  const dx = cueBall.x - aimState.pointerX;
-  const dy = cueBall.y - aimState.pointerY;
+  const dx = cueBall.x - aimState.x;
+  const dy = cueBall.y - aimState.y;
   const dragDistance = Math.min(Math.hypot(dx, dy), 190);
   if (dragDistance < 2) {
     return null;
   }
 
-  const angle = Math.atan2(dy, dx);
   return {
-    cueBall,
-    angle,
-    dragDistance,
+    angle: Math.atan2(dy, dx),
     power: dragDistance / 190,
   };
 }
@@ -357,50 +331,67 @@ function render() {
 }
 
 function renderHeader() {
-  const roomId = roomState?.roomId || "-";
-  roomCode.textContent = roomId;
   roomHeadline.textContent = roomState
-    ? `${isPracticeMode() ? "Practice" : "Room"} ${roomState.roomId}`
+    ? `${roomState.mode === "practice" ? "Practice" : roomState.mode === "ai" ? "CPU Match" : "Online Room"} ${roomState.roomId}`
     : "No room yet";
-  shotCount.textContent = String(roomState?.game?.shotCount || 0);
+  statusText.textContent = roomState
+    ? roomState.game.statusMessage
+    : "Create a room, copy the link, and let someone join from anywhere this server is reachable.";
+  roomCode.textContent = roomState?.roomId || "-";
   modeText.textContent = roomState
-    ? isPracticeMode()
-      ? "Solo"
-      : isComputerMode()
+    ? roomState.mode === "practice"
+      ? "Practice"
+      : roomState.mode === "ai"
         ? "CPU"
-        : "Versus"
+        : "Online"
     : "Mode";
+  turnText.textContent = getTurnLabel();
+  tableStateText.textContent = getTableStateLabel();
   copyInviteButton.disabled = !roomState || roomState.mode !== "multiplayer";
   restartButton.disabled = !roomState;
+}
 
+function getTurnLabel() {
   if (!roomState) {
-    turnText.textContent = "Waiting";
-    statusText.textContent = "Create a multiplayer table, or open a solo practice session.";
-    return;
+    return "Waiting";
   }
-
-  const currentPlayer = roomState.players.find(
-    (player) => player.id === roomState.game.currentTurnPlayerId
-  );
   const winner = roomState.players.find((player) => player.id === roomState.game.winnerId);
-
   if (winner) {
-    turnText.textContent = `${winner.name} won`;
-  } else if (currentPlayer) {
-    turnText.textContent = isPracticeMode() ? "Your turn" : `${currentPlayer.name}'s turn`;
-  } else {
-    turnText.textContent = "Waiting";
+    return `${winner.name} won`;
   }
+  const current = roomState.players.find((player) => player.id === roomState.game.currentTurnPlayerId);
+  if (!current) {
+    return "Waiting";
+  }
+  return current.id === playerId ? "Your turn" : `${current.name}'s turn`;
+}
 
-  statusText.textContent = roomState.game.statusMessage;
+function getTableStateLabel() {
+  if (!roomState) {
+    return "Open";
+  }
+  if (roomState.game.openTable) {
+    return "Open table";
+  }
+  const youGroup = roomState.game.playerGroups[playerId];
+  if (youGroup) {
+    return youGroup === "solids" ? "You: solids" : "You: stripes";
+  }
+  return "Claimed";
 }
 
 function renderScoreboard() {
   if (!roomState) {
     scoreboard.innerHTML = `
       <article class="player-card">
-        <h3>Open a table</h3>
-        <p>Choose Practice Solo, Play Computer, or create a room for a friend.</p>
+        <div class="player-meta">
+          <span>Multiplayer</span>
+          <strong>Room-based sync</strong>
+        </div>
+        <div class="player-points">
+          <span>Online</span>
+          <strong>Ready</strong>
+        </div>
       </article>
     `;
     return;
@@ -408,32 +399,28 @@ function renderScoreboard() {
 
   scoreboard.innerHTML = roomState.players
     .map((player) => {
-      const activeClass = player.id === roomState.game.currentTurnPlayerId ? "active" : "";
-      const me = player.isComputer
-        ? "Computer"
-        : player.id === playerId
-          ? isPracticeMode()
-            ? "Practice"
-            : "You"
-          : "Friend";
+      const active = player.id === roomState.game.currentTurnPlayerId ? "active" : "";
+      const group = player.group
+        ? `<span class="group-badge ${player.group}">${player.group === "solids" ? "Solids" : "Stripes"}</span>`
+        : `<span class="group-badge">Open table</span>`;
+      const role = player.isComputer ? "Computer" : player.id === playerId ? "You" : "Opponent";
       const status = player.isComputer
         ? roomState.game.isAiThinking
           ? "Thinking"
           : "Ready"
-        : isPracticeMode()
-          ? "Solo session"
-          : player.connected
-            ? "Online"
-            : "Away";
+        : player.connected
+          ? "Online"
+          : "Away";
       return `
-        <article class="player-card ${activeClass}">
+        <article class="player-card ${active}">
           <div class="player-meta">
-            <span>${escapeHtml(me)}</span>
+            <span>${escapeHtml(role)}</span>
             <strong>${escapeHtml(player.name)}</strong>
+            ${group}
           </div>
           <div class="player-points">
             <span>${escapeHtml(status)}</span>
-            <strong>${player.score}</strong>
+            <strong>${getRemainingLabel(player)}</strong>
           </div>
         </article>
       `;
@@ -441,11 +428,22 @@ function renderScoreboard() {
     .join("");
 }
 
+function getRemainingLabel(player) {
+  if (!roomState || roomState.game.openTable || !player.group) {
+    return "Open";
+  }
+
+  const remaining = roomState.game.balls.filter(
+    (ball) => ball.suit === player.group && !ball.pocketed
+  ).length;
+  return remaining === 0 ? "8-ball live" : `${remaining} left`;
+}
+
 function renderTable() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   drawTable();
 
-  const balls = getRenderedBalls();
+  const balls = getDisplayedBalls();
   balls.forEach(drawBallShadow);
   balls.forEach(drawBall);
 
@@ -453,63 +451,52 @@ function renderTable() {
     drawAimGuide();
   }
 
-  drawGuidanceOverlay();
+  drawInstructionOverlay();
 
   if (!roomState) {
-    drawTableMessage("Create a room or practice table to rack the balls.");
+    drawCenterMessage("Create a room to rack the table.");
     return;
   }
 
-  if (!isPracticeMode() && !isComputerMode() && roomState.players.length < 2) {
-    drawTableMessage("Waiting for a second player to join.");
+  if (roomState.mode === "multiplayer" && roomState.players.length < 2) {
+    drawCenterMessage("Waiting for a second player to join online.");
     return;
-  }
-
-  if (!canShoot() && !roomState.game.winnerId) {
-    const turnPlayer = roomState.players.find(
-      (player) => player.id === roomState.game.currentTurnPlayerId
-    );
-    drawTableMessage(
-      roomState.game.isAiThinking
-        ? "House Bot is lining up a shot."
-        : turnPlayer?.id === playerId
-        ? "Shot in progress..."
-        : `${turnPlayer?.name || "Opponent"} is lining up a shot.`
-    );
   }
 
   if (roomState.game.winnerId) {
     const winner = roomState.players.find((player) => player.id === roomState.game.winnerId);
-    drawTableMessage(`${winner?.name || "A player"} wins the rack. Start a new one anytime.`);
+    drawCenterMessage(`${winner?.name || "Winner"} takes the rack.`);
+  } else if (!canShoot() && (roomState.game.isSimulating || roomState.game.isAiThinking)) {
+    drawCenterMessage(roomState.game.isAiThinking ? "House Bot is reading the table." : "Shot resolving...");
   }
 }
 
 function drawTable() {
-  ctx.fillStyle = "#26170f";
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 30);
+  ctx.fillStyle = "#7a4f38";
+  roundRect(ctx, 0, 0, canvas.width, canvas.height, 28);
   ctx.fill();
 
-  const tableGradient = ctx.createLinearGradient(0, 24, 0, canvas.height - 24);
-  tableGradient.addColorStop(0, "#1a7656");
-  tableGradient.addColorStop(0.4, "#0f5c41");
-  tableGradient.addColorStop(1, "#0c4631");
-  ctx.fillStyle = tableGradient;
-  roundRect(ctx, 24, 24, canvas.width - 48, canvas.height - 48, 24);
+  const felt = ctx.createLinearGradient(0, 24, 0, canvas.height - 24);
+  felt.addColorStop(0, "#20c997");
+  felt.addColorStop(0.45, "#0fa37f");
+  felt.addColorStop(1, "#087a61");
+  ctx.fillStyle = felt;
+  roundRect(ctx, 24, 24, canvas.width - 48, canvas.height - 48, 22);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.strokeStyle = "rgba(255,255,255,0.16)";
   ctx.lineWidth = 2;
   ctx.strokeRect(96, 24, 1, canvas.height - 48);
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
   ctx.beginPath();
   ctx.arc(192, canvas.height / 2, 88, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.1)";
   ctx.stroke();
 
   const pockets = roomState?.game?.table?.pockets || DEFAULT_POCKETS;
   pockets.forEach((pocket) => {
-    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 6, pocket.x, pocket.y, 24);
-    rim.addColorStop(0, "#050404");
-    rim.addColorStop(1, "#2f1f18");
+    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 5, pocket.x, pocket.y, 24);
+    rim.addColorStop(0, "#080808");
+    rim.addColorStop(1, "#372218");
     ctx.beginPath();
     ctx.arc(pocket.x, pocket.y, 24, 0, Math.PI * 2);
     ctx.fillStyle = rim;
@@ -522,10 +509,10 @@ function drawBallShadow(ball) {
     return;
   }
 
-  const radius = getBallRenderRadius(ball);
-  const opacity = ball.sinking ? 0.26 * (1 - ball.sinkProgress * 0.6) : 0.26;
+  const radius = getBallRadius(ball);
+  const alpha = ball.sinking ? 0.18 : 0.24;
   const shadow = ctx.createRadialGradient(ball.x + 3, ball.y + 5, 3, ball.x + 3, ball.y + 5, radius + 5);
-  shadow.addColorStop(0, `rgba(0, 0, 0, ${opacity})`);
+  shadow.addColorStop(0, `rgba(0, 0, 0, ${alpha})`);
   shadow.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.beginPath();
   ctx.arc(ball.x + 3, ball.y + 5, radius + 4, 0, Math.PI * 2);
@@ -538,126 +525,124 @@ function drawBall(ball) {
     return;
   }
 
-  const radius = getBallRenderRadius(ball);
-  const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.7 : 1;
-  const base = ctx.createRadialGradient(
-    ball.x - radius * 0.45,
+  const radius = getBallRadius(ball);
+  const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.75 : 1;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+  ctx.fillStyle = makeBallGradient(ball, radius);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.stroke();
+
+  if (ball.suit === "stripes") {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = ball.color;
+    ctx.fillRect(ball.x - radius, ball.y - radius * 0.4, radius * 2, radius * 0.8);
+    ctx.restore();
+  }
+
+  if (ball.kind === "object") {
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, radius * 0.47, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
+    ctx.fill();
+    ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";
+    ctx.font = "700 10px -apple-system";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(ball.number), ball.x, ball.y + 0.5);
+  }
+
+  ctx.beginPath();
+  ctx.arc(ball.x - radius * 0.32, ball.y - radius * 0.35, radius * 0.26, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.3)";
+  ctx.fill();
+  ctx.restore();
+}
+
+function makeBallGradient(ball, radius) {
+  const gradient = ctx.createRadialGradient(
+    ball.x - radius * 0.42,
     ball.y - radius * 0.5,
     radius * 0.2,
     ball.x,
     ball.y,
     radius
   );
-  base.addColorStop(0, lightenColor(ball.color, 0.35));
-  base.addColorStop(0.55, ball.color);
-  base.addColorStop(1, darkenColor(ball.color, 0.28));
+  gradient.addColorStop(0, lightenColor(ball.color, 0.36));
+  gradient.addColorStop(0.55, ball.number === 8 ? "#1c1c1c" : ball.color);
+  gradient.addColorStop(1, darkenColor(ball.number === 8 ? "#1c1c1c" : ball.color, 0.28));
+  return gradient;
+}
 
-  ctx.beginPath();
-  ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = base;
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fill();
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
-  ctx.stroke();
-
-  if (ball.kind === "object") {
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius * 0.48, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(251, 247, 240, 0.96)";
-    ctx.fill();
-
-    ctx.fillStyle = "#4b3024";
-    ctx.font = "700 10px Barlow";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(ball.label, ball.x, ball.y + 0.5);
+function getBallRadius(ball) {
+  const base = roomState?.game?.table?.ballRadius || 12;
+  if (!ball.sinking) {
+    return base;
   }
-
-  ctx.beginPath();
-  ctx.arc(ball.x - radius * 0.32, ball.y - radius * 0.36, radius * 0.28, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255,255,255,0.34)";
-  ctx.fill();
-  ctx.restore();
+  return Math.max(base * (1 - ball.sinkProgress * 0.55), 2);
 }
 
 function drawAimGuide() {
   const vector = getAimVector();
   const cueBall = getCueBall();
-  if (!cueBall || !vector) {
+  if (!vector || !cueBall) {
     return;
   }
 
+  const guideLength = 180 + vector.power * 70;
+  const backLength = 20 + vector.power * 40;
   const angle = vector.angle;
-  const power = vector.power;
-  const guideLength = 180 + power * 70;
-  const backLength = 18 + power * 44;
-  const startX = cueBall.x + Math.cos(angle) * 18;
-  const startY = cueBall.y + Math.sin(angle) * 18;
   const endX = cueBall.x + Math.cos(angle) * guideLength;
   const endY = cueBall.y + Math.sin(angle) * guideLength;
-  const cueStickX = cueBall.x - Math.cos(angle) * (34 + backLength);
-  const cueStickY = cueBall.y - Math.sin(angle) * (34 + backLength);
 
   ctx.beginPath();
-  ctx.moveTo(cueStickX, cueStickY);
+  ctx.moveTo(cueBall.x - Math.cos(angle) * (22 + backLength), cueBall.y - Math.sin(angle) * (22 + backLength));
   ctx.lineTo(cueBall.x - Math.cos(angle) * 18, cueBall.y - Math.sin(angle) * 18);
-  ctx.strokeStyle = "rgba(111, 73, 47, 0.92)";
+  ctx.strokeStyle = "rgba(168, 103, 62, 0.95)";
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.stroke();
 
   ctx.beginPath();
-  ctx.moveTo(startX, startY);
+  ctx.moveTo(cueBall.x + Math.cos(angle) * 18, cueBall.y + Math.sin(angle) * 18);
   ctx.lineTo(endX, endY);
-  ctx.strokeStyle = aimState.active ? "rgba(255, 246, 201, 0.92)" : "rgba(255, 246, 201, 0.62)";
+  ctx.strokeStyle = "rgba(255,255,255,0.78)";
   ctx.lineWidth = aimState.active ? 3 : 2;
   ctx.setLineDash([10, 8]);
   ctx.stroke();
   ctx.setLineDash([]);
-
-  ctx.beginPath();
-  ctx.arc(endX, endY, 7, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255, 246, 201, 0.3)";
-  ctx.fill();
-
-  ctx.fillStyle = "rgba(10, 9, 8, 0.76)";
-  roundRect(ctx, 26, canvas.height - 68, 260, 40, 14);
-  ctx.fill();
-  ctx.fillStyle = "#fef8ea";
-  ctx.font = "600 14px Barlow";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  ctx.fillText(
-    `Pull back from cue ball${vector ? `  •  Power ${Math.round(power * 100)}%` : ""}`,
-    40,
-    canvas.height - 48
-  );
 }
 
-function drawGuidanceOverlay() {
-  ctx.fillStyle = "rgba(10, 9, 8, 0.62)";
-  roundRect(ctx, canvas.width - 280, 28, 232, 74, 16);
+function drawInstructionOverlay() {
+  ctx.fillStyle = "rgba(16, 33, 58, 0.44)";
+  roundRect(ctx, canvas.width - 318, 26, 270, 110, 18);
   ctx.fill();
-  ctx.fillStyle = "#fef8ea";
-  ctx.font = "600 13px Barlow";
+  ctx.fillStyle = "#f4fbff";
+  ctx.font = "700 13px -apple-system";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
-  ctx.fillText("How to shoot", canvas.width - 258, 42);
-  ctx.font = "500 12px Barlow";
-  ctx.fillStyle = "rgba(254, 248, 234, 0.82)";
-  ctx.fillText("1. Start on the cue ball", canvas.width - 258, 62);
-  ctx.fillText("2. Drag backward to set power", canvas.width - 258, 78);
-  ctx.fillText("3. Release to send it forward", canvas.width - 258, 94);
+  ctx.fillText("8-ball controls", canvas.width - 292, 42);
+  ctx.font = "500 12px -apple-system";
+  ctx.fillText("1. Start your drag on the cue ball", canvas.width - 292, 64);
+  ctx.fillText("2. Pull backward to set direction and power", canvas.width - 292, 82);
+  ctx.fillText("3. Release to fire the shot", canvas.width - 292, 100);
+  ctx.fillText("4. Clear your suit before the 8-ball", canvas.width - 292, 118);
 }
 
-function drawTableMessage(text) {
-  ctx.fillStyle = "rgba(9, 9, 9, 0.52)";
+function drawCenterMessage(text) {
+  ctx.fillStyle = "rgba(16, 33, 58, 0.46)";
   roundRect(ctx, 248, 216, 464, 92, 18);
   ctx.fill();
-  ctx.fillStyle = "#fef8ea";
-  ctx.font = "600 24px Fraunces";
+  ctx.fillStyle = "#f4fbff";
+  ctx.font = "700 24px -apple-system";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, canvas.width / 2, canvas.height / 2);
@@ -673,52 +658,6 @@ function getCanvasPoint(event) {
   };
 }
 
-function getPlayerName() {
-  const name = nameInput.value.trim().slice(0, 24) || "Player";
-  nameInput.value = name;
-  localStorage.setItem(STORAGE_KEYS.name, name);
-  return name;
-}
-
-function updateUrl(roomId) {
-  const url = new URL(window.location.href);
-
-  if (roomId) {
-    url.searchParams.set("room", roomId);
-  } else {
-    url.searchParams.delete("room");
-  }
-
-  history.replaceState({}, "", url);
-}
-
-function getInviteUrl(roomId) {
-  const url = new URL(window.location.href);
-  url.searchParams.set("room", roomId);
-  return url.toString();
-}
-
-function toggleBusy(nextBusy) {
-  createRoomButton.disabled = nextBusy;
-  computerButton.disabled = nextBusy;
-  practiceButton.disabled = nextBusy;
-  joinRoomButton.disabled = nextBusy;
-  restartButton.disabled = nextBusy || !roomState;
-}
-
-function getRenderedBalls() {
-  return displayedBalls || roomState?.game?.balls || [];
-}
-
-function getBallRenderRadius(ball) {
-  const baseRadius = roomState?.game?.table?.ballRadius || 12;
-  if (!ball.sinking) {
-    return baseRadius;
-  }
-
-  return Math.max(baseRadius * (1 - ball.sinkProgress * 0.55), 2);
-}
-
 function syncAnimationState(data, forceReset = false) {
   if (!data?.game) {
     displayedBalls = null;
@@ -726,9 +665,9 @@ function syncAnimationState(data, forceReset = false) {
   }
 
   if (forceReset) {
+    cancelAnimation();
     animatedShotId = data.game.shotId || 0;
     displayedBalls = data.game.balls;
-    cancelActiveAnimation();
     return;
   }
 
@@ -744,36 +683,65 @@ function syncAnimationState(data, forceReset = false) {
   }
 
   animatedShotId = data.game.shotId;
-  playShotAnimation(data.game.lastShotFrames, data.game.balls);
+  playAnimation(data.game.lastShotFrames, data.game.balls);
 }
 
-function playShotAnimation(frames, finalBalls) {
-  cancelActiveAnimation();
-
+function playAnimation(frames, finalBalls) {
+  cancelAnimation();
   let index = 0;
+
   const step = () => {
     displayedBalls = frames[index] || finalBalls;
     render();
     index += 1;
-
     if (index < frames.length) {
-      animationFrameId = window.setTimeout(step, 16);
+      animationTimer = window.setTimeout(step, 16);
       return;
     }
-
+    animationTimer = 0;
     displayedBalls = finalBalls;
-    animationFrameId = 0;
     render();
   };
 
   step();
 }
 
-function cancelActiveAnimation() {
-  if (animationFrameId) {
-    window.clearTimeout(animationFrameId);
-    animationFrameId = 0;
+function cancelAnimation() {
+  if (animationTimer) {
+    window.clearTimeout(animationTimer);
+    animationTimer = 0;
   }
+}
+
+function getPlayerName() {
+  const name = nameInput.value.trim().slice(0, 24) || "Player";
+  nameInput.value = name;
+  localStorage.setItem(STORAGE_KEYS.name, name);
+  return name;
+}
+
+function updateUrl(roomId) {
+  const url = new URL(window.location.href);
+  if (roomId) {
+    url.searchParams.set("room", roomId);
+  } else {
+    url.searchParams.delete("room");
+  }
+  history.replaceState({}, "", url);
+}
+
+function getInviteUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("room", roomId);
+  return url.toString();
+}
+
+function toggleBusy(nextBusy) {
+  createRoomButton.disabled = nextBusy;
+  joinRoomButton.disabled = nextBusy;
+  computerButton.disabled = nextBusy;
+  practiceButton.disabled = nextBusy;
+  restartButton.disabled = nextBusy || !roomState;
 }
 
 function showMessage(text, tone = "info") {
@@ -823,22 +791,24 @@ function mixColor(baseHex, targetHex, amount) {
   const base = hexToRgb(baseHex);
   const target = hexToRgb(targetHex);
   const clamped = Math.max(0, Math.min(1, amount));
-  const mixed = {
-    r: Math.round(base.r + (target.r - base.r) * clamped),
-    g: Math.round(base.g + (target.g - base.g) * clamped),
-    b: Math.round(base.b + (target.b - base.b) * clamped),
-  };
-  return `rgb(${mixed.r}, ${mixed.g}, ${mixed.b})`;
+  return `rgb(${
+    Math.round(base.r + (target.r - base.r) * clamped)
+  }, ${
+    Math.round(base.g + (target.g - base.g) * clamped)
+  }, ${
+    Math.round(base.b + (target.b - base.b) * clamped)
+  })`;
 }
 
 function hexToRgb(hex) {
   const normalized = hex.replace("#", "");
-  const value = normalized.length === 3
-    ? normalized
-        .split("")
-        .map((part) => part + part)
-        .join("")
-    : normalized;
+  const value =
+    normalized.length === 3
+      ? normalized
+          .split("")
+          .map((piece) => piece + piece)
+          .join("")
+      : normalized;
   const parsed = Number.parseInt(value, 16);
   return {
     r: (parsed >> 16) & 255,
