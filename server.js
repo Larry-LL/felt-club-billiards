@@ -502,11 +502,7 @@ function updateBallPositions(balls, delta) {
     ball.y += ball.vy * delta;
     ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
     ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
-    // Physically correct rolling: spin rate is the component of velocity
-    // along the stripe's normal direction, so the stripe rotates with the
-    // motion direction and reverses when the ball reverses.
-    const spin = ball.spinAngle || 0;
-    ball.spinAngle = spin + (ball.vx * Math.sin(spin) + ball.vy * Math.cos(spin)) * delta / TABLE.ballRadius;
+    ball.spinAngle = (ball.spinAngle || 0) + Math.hypot(ball.vx, ball.vy) * delta / TABLE.ballRadius;
 
     if (Math.abs(ball.vx) < TABLE.minVelocity) {
       ball.vx = 0;
@@ -713,6 +709,13 @@ function applyEightBallRules(room, playerId, outcome) {
   }
 
   if (outcome.eightBallPocketed) {
+    // 8-ball pocketed on the break — re-rack (standard casual rule)
+    if (room.game.shotCount === 1 && room.mode !== "practice") {
+      room.game = createInitialGame(playerId, room.mode, room.players);
+      room.game.statusMessage = `${shooter.name} pocketed the 8 on the break. Re-racking — same player breaks again.`;
+      return;
+    }
+
     const canShootEight = legalTarget === "eight";
     const winsRack = canShootEight && legalShot && !outcome.cueScratch;
     const winner = winsRack ? shooter : opponent;
@@ -720,10 +723,10 @@ function applyEightBallRules(room, playerId, outcome) {
     room.game.winnerId = winner?.id || null;
     room.game.winnerReason = winsRack
       ? `${shooter.name} legally pocketed the 8-ball.`
-      : `${shooter.name} lost by pocketing the 8-ball early or scratching on it.`;
+      : `${shooter.name} pocketed the 8-ball early or scratched on it — automatic loss.`;
     room.game.statusMessage = winsRack
-      ? `${shooter.name} wins by sinking the 8-ball.`
-      : `${winner?.name || "Opponent"} wins after an illegal 8-ball result.`;
+      ? `${shooter.name} wins — 8-ball down!`
+      : `${winner?.name || "Opponent"} wins. ${shooter.name} pocketed the 8 illegally.`;
     return;
   }
 

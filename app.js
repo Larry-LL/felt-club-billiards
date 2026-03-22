@@ -485,40 +485,69 @@ function renderTable() {
 }
 
 function drawTable() {
-  ctx.fillStyle = "#7a4f38";
+  // Outer rail — classic dark mahogany wood
+  const rail = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  rail.addColorStop(0, "#2e1206");
+  rail.addColorStop(0.5, "#1a0904");
+  rail.addColorStop(1, "#2e1206");
+  ctx.fillStyle = rail;
   roundRect(ctx, 0, 0, canvas.width, canvas.height, 28);
   ctx.fill();
 
+  // Wood grain highlight along the rails
+  ctx.strokeStyle = "rgba(120, 60, 20, 0.35)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    const offset = 4 + i * 4;
+    ctx.beginPath();
+    ctx.moveTo(offset, offset);
+    ctx.lineTo(canvas.width - offset, offset);
+    ctx.stroke();
+  }
+
+  // Classic billiards green felt
   const felt = ctx.createLinearGradient(0, 24, 0, canvas.height - 24);
-  felt.addColorStop(0, "#20c997");
-  felt.addColorStop(0.45, "#0fa37f");
-  felt.addColorStop(1, "#087a61");
+  felt.addColorStop(0, "#2e6b1e");
+  felt.addColorStop(0.45, "#1e4f14");
+  felt.addColorStop(1, "#163a0e");
   ctx.fillStyle = felt;
   roundRect(ctx, 24, 24, canvas.width - 48, canvas.height - 48, 22);
   ctx.fill();
 
-  ctx.strokeStyle = "rgba(255,255,255,0.16)";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(96, 24, 1, canvas.height - 48);
-  ctx.beginPath();
-  ctx.arc(192, canvas.height / 2, 88, 0, Math.PI * 2);
-  ctx.strokeStyle = "rgba(255,255,255,0.1)";
+  // Cushion inner edge — slight lighter strip where rail meets felt
+  ctx.strokeStyle = "rgba(80, 160, 60, 0.3)";
+  ctx.lineWidth = 3;
+  roundRect(ctx, 26, 26, canvas.width - 52, canvas.height - 52, 20);
   ctx.stroke();
 
+  // Head string and baulk circle markings
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(96, 26);
+  ctx.lineTo(96, canvas.height - 26);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(192, canvas.height / 2, 88, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.stroke();
+
+  // Pockets
   const pockets = roomState?.game?.table?.pockets || DEFAULT_POCKETS;
   pockets.forEach((pocket) => {
-    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 5, pocket.x, pocket.y, 24);
-    rim.addColorStop(0, "#080808");
-    rim.addColorStop(1, "#372218");
+    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 4, pocket.x, pocket.y, 26);
+    rim.addColorStop(0, "#050505");
+    rim.addColorStop(0.6, "#0e0e0e");
+    rim.addColorStop(1, "#1a0904");
     ctx.beginPath();
-    ctx.arc(pocket.x, pocket.y, 24, 0, Math.PI * 2);
+    ctx.arc(pocket.x, pocket.y, 26, 0, Math.PI * 2);
     ctx.fillStyle = rim;
     ctx.fill();
   });
 }
 
 function drawBallShadow(ball) {
-  if (ball.pocketed && ball.id !== "cue") {
+  if ((ball.pocketed || ball.sinking) && ball.id !== "cue") {
     return;
   }
 
@@ -534,18 +563,22 @@ function drawBallShadow(ball) {
 }
 
 function drawBall(ball) {
-  if (ball.pocketed && ball.id !== "cue") {
+  // Object balls vanish the moment they enter a pocket
+  if ((ball.pocketed || ball.sinking) && ball.id !== "cue") {
+    return;
+  }
+  if (ball.pocketed && ball.id === "cue") {
     return;
   }
 
   const radius = getBallRadius(ball);
-  const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.75 : 1;
+  const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.75 : 1; // cue-ball scratch fade
   const spinAngle = ball.spinAngle || 0;
 
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  // Base sphere gradient — lighting stays fixed, doesn't rotate
+  // 1. Base sphere gradient (lighting is fixed, never rotates)
   ctx.beginPath();
   ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
   ctx.fillStyle = makeBallGradient(ball, radius);
@@ -554,82 +587,70 @@ function drawBall(ball) {
   ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
 
-  // Stripe band rotates with the ball's rolling motion
+  // 2. All surface markings rotate together with spinAngle
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.translate(ball.x, ball.y);
+  ctx.rotate(spinAngle);
+
   if (ball.suit === "stripes") {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.translate(ball.x, ball.y);
-    ctx.rotate(spinAngle);
+    // Stripe band — rotates to show rolling direction
     ctx.fillStyle = ball.color;
     ctx.fillRect(-radius, -radius * 0.62, radius * 2, radius * 1.24);
-    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.fillStyle = "rgba(0,0,0,0.25)";
     ctx.fillRect(-radius, -radius * 0.62, radius * 2, 2.5);
     ctx.fillRect(-radius, radius * 0.62 - 2.5, radius * 2, 2.5);
-    ctx.restore();
-  }
-
-  // Equator rolling dot — clearly shows rotation direction on solid and 8 balls
-  if (ball.kind === "object" && ball.suit !== "stripes") {
-    const dotRadius = radius * 0.2;
-    const dotX = ball.x + Math.cos(spinAngle) * (radius * 0.68);
-    const dotY = ball.y + Math.sin(spinAngle) * (radius * 0.68);
-    ctx.save();
+    // Number badge sits on the stripe
     ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.beginPath();
-    ctx.arc(dotX, dotY, dotRadius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    ctx.arc(0, 0, radius * 0.42, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255,0.96)";
     ctx.fill();
-    ctx.restore();
-  }
-
-  // Rolling dot on cue ball
-  if (ball.id === "cue") {
-    const dotX = ball.x + Math.cos(spinAngle) * radius * 0.55;
-    const dotY = ball.y + Math.sin(spinAngle) * radius * 0.55;
-    ctx.save();
+    ctx.fillStyle = "#203145";
+    ctx.font = "700 10px -apple-system";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(ball.number), 0, 0.5);
+  } else if (ball.kind === "object") {
+    // Rolling dot orbits the equator — clear rotation indicator
     ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.beginPath();
-    ctx.arc(dotX, dotY, radius * 0.18, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(80,130,200,0.55)";
+    ctx.arc(0, radius * 0.66, radius * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = ball.number === 8 ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.4)";
     ctx.fill();
-    ctx.restore();
-  }
-
-  // Number badge orbits with the rolling spin
-  if (ball.kind === "object") {
-    const orbit = radius * 0.28;
-    const bx = ball.x + Math.cos(spinAngle) * orbit;
-    const by = ball.y + Math.sin(spinAngle) * orbit;
+    // Number badge stays centered and readable
     ctx.beginPath();
-    ctx.arc(bx, by, radius * 0.42, 0, Math.PI * 2);
+    ctx.arc(0, 0, radius * 0.46, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255,255,255,0.96)";
     ctx.fill();
     ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";
     ctx.font = "700 10px -apple-system";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(ball.number), bx, by + 0.5);
+    ctx.fillText(String(ball.number), 0, 0.5);
+  } else if (ball.id === "cue") {
+    // Blue dot on cue ball spins as it rolls
+    ctx.beginPath();
+    ctx.arc(0, radius * 0.55, radius * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(70, 130, 210, 0.6)";
+    ctx.fill();
   }
 
-  // Fixed specular highlight (simulates the light source)
+  ctx.restore(); // un-clip, un-rotate, un-translate
+
+  // 3. Fixed specular highlight — light source never moves
   ctx.beginPath();
   ctx.arc(ball.x - radius * 0.32, ball.y - radius * 0.35, radius * 0.26, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(255,255,255,0.3)";
   ctx.fill();
 
-  // Velocity-based rolling sheen on the leading edge
+  // 4. Velocity sheen on leading edge — appears only when moving
   const speed = Math.hypot(ball.vx || 0, ball.vy || 0);
   if (speed > 0.3) {
     const moveAngle = Math.atan2(ball.vy, ball.vx);
     const sheenX = ball.x + Math.cos(moveAngle) * radius * 0.62;
     const sheenY = ball.y + Math.sin(moveAngle) * radius * 0.62;
-    const sheenAlpha = Math.min(speed / 7, 1) * 0.38;
+    const sheenAlpha = Math.min(speed / 7, 1) * 0.36;
     ctx.save();
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
