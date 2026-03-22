@@ -540,9 +540,12 @@ function drawBall(ball) {
 
   const radius = getBallRadius(ball);
   const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.75 : 1;
+  const spinAngle = ball.spinAngle || 0;
 
   ctx.save();
   ctx.globalAlpha = alpha;
+
+  // Base sphere gradient — lighting stays fixed, doesn't rotate
   ctx.beginPath();
   ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
   ctx.fillStyle = makeBallGradient(ball, radius);
@@ -551,36 +554,63 @@ function drawBall(ball) {
   ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
 
+  // Stripe band rotates with the ball
   if (ball.suit === "stripes") {
     ctx.save();
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
     ctx.clip();
+    ctx.translate(ball.x, ball.y);
+    ctx.rotate(spinAngle);
     ctx.fillStyle = ball.color;
-    ctx.fillRect(ball.x - radius, ball.y - radius * 0.58, radius * 2, radius * 1.16);
-    // Subtle dark edges on the stripe borders for definition
+    ctx.fillRect(-radius, -radius * 0.58, radius * 2, radius * 1.16);
     ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.fillRect(ball.x - radius, ball.y - radius * 0.58, radius * 2, 2);
-    ctx.fillRect(ball.x - radius, ball.y + radius * 0.58 - 2, radius * 2, 2);
+    ctx.fillRect(-radius, -radius * 0.58, radius * 2, 2);
+    ctx.fillRect(-radius, radius * 0.58 - 2, radius * 2, 2);
     ctx.restore();
   }
 
+  // Number badge orbits slightly around ball center as it spins
   if (ball.kind === "object") {
+    const orbit = radius * 0.25;
+    const bx = ball.x + Math.cos(spinAngle) * orbit;
+    const by = ball.y + Math.sin(spinAngle) * orbit;
     ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius * 0.47, 0, Math.PI * 2);
+    ctx.arc(bx, by, radius * 0.44, 0, Math.PI * 2);
     ctx.fillStyle = "rgba(255,255,255,0.96)";
     ctx.fill();
     ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";
     ctx.font = "700 10px -apple-system";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText(String(ball.number), ball.x, ball.y + 0.5);
+    ctx.fillText(String(ball.number), bx, by + 0.5);
   }
 
+  // Fixed specular highlight (simulates the light source)
   ctx.beginPath();
   ctx.arc(ball.x - radius * 0.32, ball.y - radius * 0.35, radius * 0.26, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(255,255,255,0.3)";
   ctx.fill();
+
+  // Velocity-based rolling sheen on the leading edge
+  const speed = Math.hypot(ball.vx || 0, ball.vy || 0);
+  if (speed > 0.3) {
+    const moveAngle = Math.atan2(ball.vy, ball.vx);
+    const sheenX = ball.x + Math.cos(moveAngle) * radius * 0.62;
+    const sheenY = ball.y + Math.sin(moveAngle) * radius * 0.62;
+    const sheenAlpha = Math.min(speed / 7, 1) * 0.38;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
+    ctx.clip();
+    const sheen = ctx.createRadialGradient(sheenX, sheenY, 0, sheenX, sheenY, radius * 0.6);
+    sheen.addColorStop(0, `rgba(255,255,255,${sheenAlpha})`);
+    sheen.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = sheen;
+    ctx.fillRect(ball.x - radius, ball.y - radius, radius * 2, radius * 2);
+    ctx.restore();
+  }
+
   ctx.restore();
 }
 
@@ -739,6 +769,7 @@ function playAnimation(frames, finalBalls) {
         x: ball.x + (ballB.x - ball.x) * alpha,
         y: ball.y + (ballB.y - ball.y) * alpha,
         sinkProgress: ball.sinkProgress + (ballB.sinkProgress - ball.sinkProgress) * alpha,
+        spinAngle: (ball.spinAngle || 0) + ((ballB.spinAngle || 0) - (ball.spinAngle || 0)) * alpha,
       };
     });
 

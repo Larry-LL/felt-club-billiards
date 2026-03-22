@@ -358,6 +358,7 @@ function createRack() {
       pocketTargetX: null,
       pocketTargetY: null,
       kind: "cue",
+      spinAngle: 0,
     },
   ];
 
@@ -381,6 +382,7 @@ function createRack() {
         pocketTargetX: null,
         pocketTargetY: null,
         kind: "object",
+        spinAngle: 0,
       });
       rackIndex += 1;
     }
@@ -451,6 +453,7 @@ function captureBalls(balls) {
     sinking: ball.sinking,
     sinkProgress: ball.sinkProgress,
     kind: ball.kind,
+    spinAngle: ball.spinAngle || 0,
   }));
 }
 
@@ -499,6 +502,7 @@ function updateBallPositions(balls, delta) {
     ball.y += ball.vy * delta;
     ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
     ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
+    ball.spinAngle = (ball.spinAngle || 0) + Math.hypot(ball.vx, ball.vy) * delta / TABLE.ballRadius;
 
     if (Math.abs(ball.vx) < TABLE.minVelocity) {
       ball.vx = 0;
