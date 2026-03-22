@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Felt Club Billiards</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Multiplayer Browser Game</p>
+          <h1>Felt Club Billiards</h1>
+          <p class="lede">
+            Create a room for a friend or open a solo practice table, then work on your aim
+            with a live shot guide and a polished table view.
+          </p>
+        </div>
+
+        <aside class="hero-card">
+          <p class="card-label">Live Match</p>
+          <strong id="roomHeadline">No room yet</strong>
+          <span id="statusText">Create a table or join a friend with a room code.</span>
+          <button id="copyInviteButton" class="ghost-button" type="button" disabled>
+            Copy Invite Link
+          </button>
+        </aside>
+      </header>
+
+      <main class="layout">
+        <section class="panel control-panel">
+          <div class="section-heading">
+            <h2>Seat At The Table</h2>
+            <p>Use the same name on refresh to reclaim your seat.</p>
+          </div>
+
+          <div class="form-grid">
+            <label>
+              Display name
+              <input id="nameInput" type="text" maxlength="24" placeholder="Player name" />
+            </label>
+            <label>
+              Room code
+              <input id="roomInput" type="text" maxlength="5" placeholder="ABCDE" />
+            </label>
+          </div>
+
+          <div class="button-row">
+            <button id="createRoomButton" class="primary-button" type="button">
+              Create Room
+            </button>
+            <button id="computerButton" class="secondary-button" type="button">
+              Play Computer
+            </button>
+            <button id="practiceButton" class="secondary-button" type="button">
+              Practice Solo
+            </button>
+            <button id="joinRoomButton" class="secondary-button" type="button">
+              Join Room
+            </button>
+            <button id="restartButton" class="secondary-button" type="button" disabled>
+              New Rack
+            </button>
+          </div>
+
+          <div class="pill-row">
+            <span class="pill">
+              <span class="pill-label">Room</span>
+              <strong id="roomCode">-</strong>
+            </span>
+            <span class="pill">
+              <span class="pill-label">Mode</span>
+              <strong id="modeText">Mode</strong>
+            </span>
+            <span class="pill">
+              <span class="pill-label">Turn</span>
+              <strong id="turnText">Waiting</strong>
+            </span>
+            <span class="pill">
+              <span class="pill-label">Shots</span>
+              <strong id="shotCount">0</strong>
+            </span>
+          </div>
+
+          <div id="message" class="message info">
+            Move your pointer to preview the aim line, then drag away from the cue ball to shoot.
+          </div>
+
+          <div class="scoreboard" id="scoreboard"></div>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="section-heading compact">
+            <h2>Table</h2>
+            <p>Practice alone or race a friend to 4 pocketed colored balls.</p>
+          </div>
+
+          <div class="canvas-frame">
+            <canvas id="tableCanvas" width="960" height="520"></canvas>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
