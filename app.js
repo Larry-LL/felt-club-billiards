@@ -688,27 +688,56 @@ function syncAnimationState(data, forceReset = false) {
 
 function playAnimation(frames, finalBalls) {
   cancelAnimation();
-  let index = 0;
-
-  const step = () => {
-    displayedBalls = frames[index] || finalBalls;
-    render();
-    index += 1;
-    if (index < frames.length) {
-      animationTimer = window.setTimeout(step, 16);
-      return;
-    }
-    animationTimer = 0;
+  if (frames.length < 2) {
     displayedBalls = finalBalls;
     render();
+    return;
+  }
+
+  const MS_PER_FRAME = 16;
+  const totalDuration = frames.length * MS_PER_FRAME;
+  const startTime = performance.now();
+
+  const step = (now) => {
+    const elapsed = now - startTime;
+    const t = Math.min(elapsed / totalDuration, 1);
+    const floatIndex = t * (frames.length - 1);
+    const lo = Math.floor(floatIndex);
+    const hi = Math.min(lo + 1, frames.length - 1);
+    const alpha = floatIndex - lo;
+    const frameA = frames[lo];
+    const frameB = frames[hi];
+
+    displayedBalls = frameA.map((ball, i) => {
+      const ballB = frameB[i];
+      if (!ballB || ball.pocketed) {
+        return ball;
+      }
+      return {
+        ...ball,
+        x: ball.x + (ballB.x - ball.x) * alpha,
+        y: ball.y + (ballB.y - ball.y) * alpha,
+        sinkProgress: ball.sinkProgress + (ballB.sinkProgress - ball.sinkProgress) * alpha,
+      };
+    });
+
+    render();
+
+    if (t < 1) {
+      animationTimer = requestAnimationFrame(step);
+    } else {
+      animationTimer = 0;
+      displayedBalls = finalBalls;
+      render();
+    }
   };
 
-  step();
+  animationTimer = requestAnimationFrame(step);
 }
 
 function cancelAnimation() {
   if (animationTimer) {
-    window.clearTimeout(animationTimer);
+    cancelAnimationFrame(animationTimer);
     animationTimer = 0;
   }
 }

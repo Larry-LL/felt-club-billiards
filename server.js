@@ -455,11 +455,11 @@ function captureBalls(balls) {
 }
 
 function compressFrames(frames) {
-  if (frames.length <= 90) {
+  if (frames.length <= 150) {
     return frames;
   }
 
-  const stride = Math.ceil(frames.length / 90);
+  const stride = Math.ceil(frames.length / 150);
   const compact = [];
   for (let index = 0; index < frames.length; index += stride) {
     compact.push(frames[index]);
