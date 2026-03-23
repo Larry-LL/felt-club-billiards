@@ -40,12 +40,14 @@ let eventSource = null;
 let displayedBalls = null;
 let animatedShotId = 0;
 let animationTimer = 0;
-let aimState = {
-  active: false,
-  hover: false,
-  x: 0,
-  y: 0,
-};
+let aimAngle = 0;
+let isCharging = false;
+let chargeStartTime = 0;
+let currentPower = 0;
+let shotInFlight = false;
+let placementPos = null;
+let keysDown = new Set();
+let gameLoopId = 0;
 
 initialize();
 
@@ -59,10 +61,10 @@ function initialize() {
   restartButton.addEventListener("click", restartRack);
   copyInviteButton.addEventListener("click", copyInviteLink);
 
-  canvas.addEventListener("pointerdown", beginAim);
-  canvas.addEventListener("pointermove", moveAim);
-  canvas.addEventListener("pointerleave", clearAim);
-  window.addEventListener("pointerup", releaseAim);
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("keyup", handleKeyUp);
+  canvas.addEventListener("pointermove", handlePointerMove);
+  canvas.addEventListener("pointerdown", handleCanvasClick);
   window.addEventListener("beforeunload", closeEventStream);
 
   render();
@@ -223,78 +225,98 @@ async function copyInviteLink() {
   showMessage("Room link copied. Anyone who can reach this server URL can join that room.", "success");
 }
 
-function beginAim(event) {
-  if (!canShoot()) {
-    return;
+function handleKeyDown(event) {
+  if (document.activeElement?.tagName === "INPUT") return;
+
+  if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
+    event.preventDefault();
+    keysDown.add(event.code);
+    startGameLoop();
   }
 
-  const cueBall = getCueBall();
-  if (!cueBall) {
-    return;
-  }
+  if (event.code === "Space") {
+    event.preventDefault();
+    if (!canShoot()) return;
 
-  const point = getCanvasPoint(event);
-  if (Math.hypot(point.x - cueBall.x, point.y - cueBall.y) > 64) {
-    return;
-  }
-
-  aimState.active = true;
-  aimState.hover = true;
-  aimState.x = point.x;
-  aimState.y = point.y;
-  render();
-}
-
-function moveAim(event) {
-  if (!roomState || !canShoot()) {
-    aimState.hover = false;
-    if (!aimState.active) {
-      render();
+    // If ball-in-hand, accept current cue ball position
+    if (roomState.game.ballInHand) {
+      const cueBall = getCueBall();
+      if (cueBall) placeCueBall(cueBall.x, cueBall.y);
+      return;
     }
-    return;
-  }
 
-  const point = getCanvasPoint(event);
-  aimState.hover = true;
-  aimState.x = point.x;
-  aimState.y = point.y;
-  render();
+    if (!isCharging && !shotInFlight) {
+      isCharging = true;
+      chargeStartTime = performance.now();
+      currentPower = 0;
+      startGameLoop();
+    }
+  }
 }
 
-function clearAim() {
-  aimState.hover = false;
-  if (!aimState.active) {
+function handleKeyUp(event) {
+  if (event.code === "ArrowLeft" || event.code === "ArrowRight") {
+    keysDown.delete(event.code);
+  }
+
+  if (event.code === "Space" && isCharging) {
+    event.preventDefault();
+    isCharging = false;
+    if (currentPower >= 0.05) {
+      fireShot();
+    }
+    currentPower = 0;
     render();
   }
 }
 
-async function releaseAim(event) {
-  if (!aimState.active || !canShoot()) {
-    aimState.active = false;
-    render();
-    return;
+function startGameLoop() {
+  if (gameLoopId) return;
+
+  function tick() {
+    let needsRender = false;
+
+    if (canShoot() && !roomState.game.ballInHand) {
+      if (keysDown.has("ArrowLeft")) {
+        aimAngle -= 0.025;
+        needsRender = true;
+      }
+      if (keysDown.has("ArrowRight")) {
+        aimAngle += 0.025;
+        needsRender = true;
+      }
+    }
+
+    if (isCharging) {
+      const elapsed = performance.now() - chargeStartTime;
+      currentPower = Math.min(elapsed / 2000, 1);
+      needsRender = true;
+    }
+
+    if (needsRender) render();
+
+    if (keysDown.size > 0 || isCharging) {
+      gameLoopId = requestAnimationFrame(tick);
+    } else {
+      gameLoopId = 0;
+    }
   }
 
-  const cueBall = getCueBall();
-  const point = getCanvasPoint(event);
-  const dx = cueBall.x - point.x;
-  const dy = cueBall.y - point.y;
-  const dragDistance = Math.min(Math.hypot(dx, dy), 190);
-  aimState.active = false;
-  render();
+  gameLoopId = requestAnimationFrame(tick);
+}
 
-  if (dragDistance < 18) {
-    return;
-  }
+async function fireShot() {
+  if (!canShoot() || shotInFlight) return;
 
+  shotInFlight = true;
   toggleBusy(true);
   try {
     const data = await request(`/api/rooms/${roomState.roomId}/shots`, {
       method: "POST",
       body: JSON.stringify({
         playerId,
-        angle: Math.atan2(dy, dx),
-        power: dragDistance / 190,
+        angle: aimAngle,
+        power: currentPower,
       }),
     });
     roomState = data;
@@ -303,6 +325,53 @@ async function releaseAim(event) {
   } catch (error) {
     showMessage(error.message, "error");
   } finally {
+    shotInFlight = false;
+    toggleBusy(false);
+  }
+}
+
+function handlePointerMove(event) {
+  if (!canShoot() || !roomState.game.ballInHand) return;
+  placementPos = getCanvasPoint(event);
+  render();
+}
+
+function handleCanvasClick(event) {
+  if (!canShoot() || !roomState.game.ballInHand) return;
+
+  const point = getCanvasPoint(event);
+  if (point.x < 30 || point.x > 930 || point.y < 30 || point.y > 490) return;
+
+  const balls = getDisplayedBalls();
+  const tooClose = balls.some(
+    (b) => !b.pocketed && b.id !== "cue" && Math.hypot(b.x - point.x, b.y - point.y) < 24
+  );
+  if (tooClose) {
+    showMessage("Too close to another ball. Try a different spot.", "error");
+    return;
+  }
+
+  placeCueBall(point.x, point.y);
+}
+
+async function placeCueBall(x, y) {
+  if (shotInFlight) return;
+  shotInFlight = true;
+  toggleBusy(true);
+  try {
+    const data = await request(`/api/rooms/${roomState.roomId}/place-cue`, {
+      method: "POST",
+      body: JSON.stringify({ playerId, x, y }),
+    });
+    roomState = data;
+    placementPos = null;
+    syncAnimationState(roomState, true);
+    render();
+    showMessage("Cue ball placed. Use ← → to aim, hold Space to charge.", "success");
+  } catch (error) {
+    showMessage(error.message, "error");
+  } finally {
+    shotInFlight = false;
     toggleBusy(false);
   }
 }
@@ -326,25 +395,6 @@ function getDisplayedBalls() {
   return displayedBalls || roomState?.game?.balls || [];
 }
 
-function getAimVector() {
-  const cueBall = getCueBall();
-  if (!cueBall || (!aimState.active && !aimState.hover)) {
-    return null;
-  }
-
-  const dx = cueBall.x - aimState.x;
-  const dy = cueBall.y - aimState.y;
-  const dragDistance = Math.min(Math.hypot(dx, dy), 190);
-  if (dragDistance < 2) {
-    return null;
-  }
-
-  return {
-    angle: Math.atan2(dy, dx),
-    power: dragDistance / 190,
-  };
-}
-
 function render() {
   renderHeader();
   renderScoreboard();
@@ -353,17 +403,12 @@ function render() {
 }
 
 function renderPowerBar() {
-  if (!aimState.active) {
-    powerBarDiv.classList.add("hidden");
-    return;
-  }
-  const vector = getAimVector();
-  if (!vector) {
+  if (!isCharging) {
     powerBarDiv.classList.add("hidden");
     return;
   }
   powerBarDiv.classList.remove("hidden");
-  const pct = Math.round(vector.power * 100);
+  const pct = Math.round(currentPower * 100);
   powerFill.style.width = `${pct}%`;
   powerValue.textContent = `${pct}%`;
 }
@@ -460,11 +505,14 @@ function renderTable() {
   balls.forEach(drawBallShadow);
   balls.forEach(drawBall);
 
-  if (aimState.active && canShoot()) {
+  // Only show cue stick when aiming — not during animation or ball-in-hand
+  if (canShoot() && !roomState.game.ballInHand && !animationTimer) {
     drawAimGuide();
   }
 
-  drawInstructionOverlay();
+  if (canShoot() && roomState.game.ballInHand) {
+    drawBallInHandOverlay();
+  }
 
   if (!roomState) {
     drawCenterMessage("Create a room to rack the table.");
@@ -607,14 +655,15 @@ function drawSinkingBall(ball) {
 
   // Stripe band for stripe balls
   if (ball.suit === "stripes" && drawRadius > 3) {
+    const ry = ball.rollY || 0;
+    const bandY = Math.sin(ry) * drawRadius * 0.7;
+    const bandHalf = drawRadius * 0.62 * Math.max(Math.abs(Math.cos(ry)), 0.2);
     ctx.save();
     ctx.beginPath();
     ctx.arc(drawX, drawY, drawRadius, 0, Math.PI * 2);
     ctx.clip();
-    ctx.translate(drawX, drawY);
-    ctx.rotate(ball.spinAngle || 0);
     ctx.fillStyle = ball.color;
-    ctx.fillRect(-drawRadius, -drawRadius * 0.62, drawRadius * 2, drawRadius * 1.24);
+    ctx.fillRect(drawX - drawRadius, drawY + bandY - bandHalf, drawRadius * 2, bandHalf * 2);
     ctx.restore();
   }
 
@@ -632,11 +681,10 @@ function drawBall(ball) {
   }
 
   const radius = getBallRadius(ball);
-  const alpha = 1;
-  const spinAngle = ball.spinAngle || 0;
+  const rx = ball.rollX || 0;
+  const ry = ball.rollY || 0;
 
   ctx.save();
-  ctx.globalAlpha = alpha;
 
   // 1. Base sphere gradient (lighting is fixed, never rotates)
   ctx.beginPath();
@@ -647,81 +695,125 @@ function drawBall(ball) {
   ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
 
-  // 2. All surface markings rotate together with spinAngle
+  // 2. Surface markings — 3D sphere projection based on rolling direction
   ctx.save();
   ctx.beginPath();
   ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
   ctx.clip();
   ctx.translate(ball.x, ball.y);
-  ctx.rotate(spinAngle);
+
+  // --- Rolling shadow: a dark spot that orbits the ball surface ---
+  // This is the strongest visual cue for rotation — visible on ALL balls
+  const shadowX = Math.sin(rx) * radius * 0.45;
+  const shadowY = Math.sin(ry) * radius * 0.45;
+  const rollingDark = ctx.createRadialGradient(shadowX, shadowY, 0, shadowX, shadowY, radius * 0.85);
+  rollingDark.addColorStop(0, "rgba(0,0,0,0.18)");
+  rollingDark.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = rollingDark;
+  ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+
+  // Rolling highlight on the opposite side
+  const rollingLight = ctx.createRadialGradient(-shadowX, -shadowY, 0, -shadowX, -shadowY, radius * 0.7);
+  rollingLight.addColorStop(0, "rgba(255,255,255,0.12)");
+  rollingLight.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.fillStyle = rollingLight;
+  ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+
+  // --- Type-specific surface markings ---
+  // Front-face 3D position (where number badge currently sits on sphere)
+  const frontX = Math.sin(rx) * radius * 0.65;
+  const frontY = Math.sin(ry) * radius * 0.65;
+  const frontZ = Math.cos(rx) * Math.cos(ry);
 
   if (ball.suit === "stripes") {
-    // Stripe band — rotates to show rolling direction
+    // Stripe band around equator — shifts vertically with ry, tilts with rx
+    const bandY = Math.sin(ry) * radius * 0.75;
+    const bandHalf = radius * 0.62 * Math.max(Math.abs(Math.cos(ry)), 0.18);
     ctx.fillStyle = ball.color;
-    ctx.fillRect(-radius, -radius * 0.62, radius * 2, radius * 1.24);
-    ctx.fillStyle = "rgba(0,0,0,0.25)";
-    ctx.fillRect(-radius, -radius * 0.62, radius * 2, 2.5);
-    ctx.fillRect(-radius, radius * 0.62 - 2.5, radius * 2, 2.5);
-    // Number badge sits on the stripe
-    ctx.beginPath();
-    ctx.arc(0, 0, radius * 0.42, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.fill();
-    ctx.fillStyle = "#203145";
-    ctx.font = "700 10px -apple-system";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(ball.number), 0, 0.5);
+    ctx.fillRect(-radius, bandY - bandHalf, radius * 2, bandHalf * 2);
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.fillRect(-radius, bandY - bandHalf, radius * 2, 1.5);
+    ctx.fillRect(-radius, bandY + bandHalf - 1.5, radius * 2, 1.5);
+
+    // Number badge orbits on sphere
+    if (frontZ > 0.05) {
+      const scale = Math.min(frontZ * 1.3, 1);
+      const br = radius * 0.42 * scale;
+      ctx.beginPath();
+      ctx.arc(frontX, frontY, br, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fill();
+      if (br > 3) {
+        ctx.fillStyle = "#203145";
+        ctx.font = `700 ${Math.max(Math.round(10 * scale), 6)}px -apple-system`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(ball.number), frontX, frontY + 0.5);
+      }
+    }
   } else if (ball.kind === "object") {
-    // Rolling dot orbits the equator — clear rotation indicator
-    ctx.beginPath();
-    ctx.arc(0, radius * 0.66, radius * 0.22, 0, Math.PI * 2);
-    ctx.fillStyle = ball.number === 8 ? "rgba(255,255,255,0.3)" : "rgba(0,0,0,0.4)";
-    ctx.fill();
-    // Number badge stays centered and readable
-    ctx.beginPath();
-    ctx.arc(0, 0, radius * 0.46, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.96)";
-    ctx.fill();
-    ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";
-    ctx.font = "700 10px -apple-system";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(String(ball.number), 0, 0.5);
+    // Number badge orbits on sphere
+    if (frontZ > 0.05) {
+      const scale = Math.min(frontZ * 1.3, 1);
+      const br = radius * 0.46 * scale;
+      ctx.beginPath();
+      ctx.arc(frontX, frontY, Math.max(br, 2), 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.96)";
+      ctx.fill();
+      if (br > 3) {
+        ctx.fillStyle = ball.number === 8 ? "#111111" : "#203145";
+        ctx.font = `700 ${Math.max(Math.round(10 * scale), 6)}px -apple-system`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(ball.number), frontX, frontY + 0.5);
+      }
+    }
+
+    // Two equator dots at opposite sides for continuous rotation visibility
+    for (const offset of [Math.PI * 0.5, Math.PI * 1.5]) {
+      const dotPhase = rx + offset;
+      const dotZ = Math.cos(dotPhase) * Math.cos(ry);
+      if (dotZ > -0.1) {
+        const dotX = Math.sin(dotPhase) * radius * 0.7;
+        const dotY = Math.sin(ry) * radius * 0.55;
+        const dotAlpha = Math.max(dotZ + 0.1, 0) * 0.5;
+        ctx.beginPath();
+        ctx.arc(dotX, dotY, radius * 0.15, 0, Math.PI * 2);
+        ctx.fillStyle = ball.number === 8
+          ? `rgba(255,255,255,${dotAlpha})`
+          : `rgba(0,0,0,${dotAlpha})`;
+        ctx.fill();
+      }
+    }
   } else if (ball.id === "cue") {
-    // Blue dot on cue ball spins as it rolls
-    ctx.beginPath();
-    ctx.arc(0, radius * 0.55, radius * 0.2, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(70, 130, 210, 0.6)";
-    ctx.fill();
+    // Blue dot orbits on cue ball
+    if (frontZ > 0.05) {
+      const scale = Math.min(frontZ * 1.3, 1);
+      ctx.beginPath();
+      ctx.arc(frontX, frontY, radius * 0.2 * scale, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(70, 130, 210, ${0.6 * scale})`;
+      ctx.fill();
+    }
+    // Second red dot at opposite pole
+    const backZ = Math.cos(rx + Math.PI) * Math.cos(ry + Math.PI);
+    if (backZ > 0.05) {
+      const bx = Math.sin(rx + Math.PI) * radius * 0.65;
+      const by = Math.sin(ry + Math.PI) * radius * 0.65;
+      const bs = Math.min(backZ * 1.3, 1);
+      ctx.beginPath();
+      ctx.arc(bx, by, radius * 0.15 * bs, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(210, 70, 70, ${0.5 * bs})`;
+      ctx.fill();
+    }
   }
 
-  ctx.restore(); // un-clip, un-rotate, un-translate
+  ctx.restore(); // un-clip, un-translate
 
   // 3. Fixed specular highlight — light source never moves
   ctx.beginPath();
   ctx.arc(ball.x - radius * 0.32, ball.y - radius * 0.35, radius * 0.26, 0, Math.PI * 2);
   ctx.fillStyle = "rgba(255,255,255,0.3)";
   ctx.fill();
-
-  // 4. Velocity sheen on leading edge — appears only when moving
-  const speed = Math.hypot(ball.vx || 0, ball.vy || 0);
-  if (speed > 0.3) {
-    const moveAngle = Math.atan2(ball.vy, ball.vx);
-    const sheenX = ball.x + Math.cos(moveAngle) * radius * 0.62;
-    const sheenY = ball.y + Math.sin(moveAngle) * radius * 0.62;
-    const sheenAlpha = Math.min(speed / 7, 1) * 0.36;
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, radius, 0, Math.PI * 2);
-    ctx.clip();
-    const sheen = ctx.createRadialGradient(sheenX, sheenY, 0, sheenX, sheenY, radius * 0.6);
-    sheen.addColorStop(0, `rgba(255,255,255,${sheenAlpha})`);
-    sheen.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = sheen;
-    ctx.fillRect(ball.x - radius, ball.y - radius, radius * 2, radius * 2);
-    ctx.restore();
-  }
 
   ctx.restore();
 }
@@ -750,50 +842,64 @@ function getBallRadius(ball) {
 }
 
 function drawAimGuide() {
-  const vector = getAimVector();
   const cueBall = getCueBall();
-  if (!vector || !cueBall) {
-    return;
-  }
+  if (!cueBall) return;
 
-  const guideLength = 180 + vector.power * 70;
-  const backLength = 20 + vector.power * 40;
-  const angle = vector.angle;
+  const power = isCharging ? currentPower : 0.3;
+  const guideLength = 180 + power * 70;
+  const backLength = 20 + power * 40;
+  const angle = aimAngle;
   const endX = cueBall.x + Math.cos(angle) * guideLength;
   const endY = cueBall.y + Math.sin(angle) * guideLength;
 
+  // Cue stick
   ctx.beginPath();
-  ctx.moveTo(cueBall.x - Math.cos(angle) * (22 + backLength), cueBall.y - Math.sin(angle) * (22 + backLength));
+  ctx.moveTo(
+    cueBall.x - Math.cos(angle) * (22 + backLength),
+    cueBall.y - Math.sin(angle) * (22 + backLength)
+  );
   ctx.lineTo(cueBall.x - Math.cos(angle) * 18, cueBall.y - Math.sin(angle) * 18);
   ctx.strokeStyle = "rgba(168, 103, 62, 0.95)";
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.stroke();
 
+  // Dotted aim line
   ctx.beginPath();
   ctx.moveTo(cueBall.x + Math.cos(angle) * 18, cueBall.y + Math.sin(angle) * 18);
   ctx.lineTo(endX, endY);
   ctx.strokeStyle = "rgba(255,255,255,0.78)";
-  ctx.lineWidth = aimState.active ? 3 : 2;
+  ctx.lineWidth = isCharging ? 3 : 2;
   ctx.setLineDash([10, 8]);
   ctx.stroke();
   ctx.setLineDash([]);
 }
 
-function drawInstructionOverlay() {
-  ctx.fillStyle = "rgba(16, 33, 58, 0.44)";
-  roundRect(ctx, canvas.width - 318, 26, 270, 110, 18);
+function drawBallInHandOverlay() {
+  // Ghost cue ball at mouse position
+  if (placementPos) {
+    const radius = roomState?.game?.table?.ballRadius || 12;
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.beginPath();
+    ctx.arc(placementPos.x, placementPos.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#f8f4ea";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255,255,255,0.6)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Prompt text
+  ctx.fillStyle = "rgba(16, 33, 58, 0.6)";
+  roundRect(ctx, canvas.width / 2 - 180, canvas.height / 2 - 24, 360, 48, 14);
   ctx.fill();
   ctx.fillStyle = "#f4fbff";
-  ctx.font = "700 13px -apple-system";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "top";
-  ctx.fillText("8-ball controls", canvas.width - 292, 42);
-  ctx.font = "500 12px -apple-system";
-  ctx.fillText("1. Start your drag on the cue ball", canvas.width - 292, 64);
-  ctx.fillText("2. Pull backward to set direction and power", canvas.width - 292, 82);
-  ctx.fillText("3. Release to fire the shot", canvas.width - 292, 100);
-  ctx.fillText("4. Clear your suit before the 8-ball", canvas.width - 292, 118);
+  ctx.font = "700 16px -apple-system";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Ball-in-hand: click to place, or Space to keep", canvas.width / 2, canvas.height / 2);
 }
 
 function drawCenterMessage(text) {
@@ -877,7 +983,8 @@ function playAnimation(frames, finalBalls) {
         x: ball.x + (ballB.x - ball.x) * alpha,
         y: ball.y + (ballB.y - ball.y) * alpha,
         sinkProgress: ball.sinkProgress + (ballB.sinkProgress - ball.sinkProgress) * alpha,
-        spinAngle: (ball.spinAngle || 0) + ((ballB.spinAngle || 0) - (ball.spinAngle || 0)) * alpha,
+        rollX: (ball.rollX || 0) + ((ballB.rollX || 0) - (ball.rollX || 0)) * alpha,
+        rollY: (ball.rollY || 0) + ((ballB.rollY || 0) - (ball.rollY || 0)) * alpha,
       };
     });
 

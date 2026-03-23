@@ -227,6 +227,57 @@ app.post("/api/rooms/:roomId/shots", (req, res) => {
   return res.json(buildRoomPayload(room, playerId));
 });
 
+app.post("/api/rooms/:roomId/place-cue", (req, res) => {
+  const room = rooms.get(normalizeRoomId(req.params.roomId));
+  if (!room) {
+    return res.status(404).json({ error: "Room not found." });
+  }
+
+  const playerId = String(req.body?.playerId || "");
+  const x = Number(req.body?.x);
+  const y = Number(req.body?.y);
+  const player = room.players.find((p) => p.id === playerId);
+
+  if (!player) {
+    return res.status(403).json({ error: "Not seated at this table." });
+  }
+  if (room.game.currentTurnPlayerId !== playerId) {
+    return res.status(409).json({ error: "Not your turn." });
+  }
+  if (!room.game.ballInHand) {
+    return res.status(409).json({ error: "No ball-in-hand available." });
+  }
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 30 || x > 930 || y < 30 || y > 490) {
+    return res.status(400).json({ error: "Position is off the table." });
+  }
+
+  const tooClose = room.game.balls.some(
+    (b) => !b.pocketed && b.id !== "cue" && Math.hypot(b.x - x, b.y - y) < TABLE.ballRadius * 2
+  );
+  if (tooClose) {
+    return res.status(400).json({ error: "Too close to another ball." });
+  }
+
+  const cueBall = room.game.balls.find((b) => b.id === "cue");
+  if (cueBall) {
+    cueBall.x = x;
+    cueBall.y = y;
+    cueBall.vx = 0;
+    cueBall.vy = 0;
+    cueBall.pocketed = false;
+    cueBall.sinking = false;
+    cueBall.sinkProgress = 0;
+    cueBall.pocketTargetX = null;
+    cueBall.pocketTargetY = null;
+  }
+  room.game.ballInHand = false;
+  room.game.statusMessage = `${player.name} placed the cue ball.`;
+  room.updatedAt = Date.now();
+  broadcastRoom(room);
+
+  return res.json(buildRoomPayload(room, playerId));
+});
+
 app.post("/api/rooms/:roomId/restart", (req, res) => {
   const room = rooms.get(normalizeRoomId(req.params.roomId));
   if (!room) {
@@ -329,6 +380,7 @@ function createInitialGame(firstPlayerId, mode, players) {
     lastShotFrames: [],
     shotCount: 0,
     openTable: true,
+    ballInHand: false,
     playerGroups: Object.fromEntries((players || []).map((player) => [player.id, null])),
     statusMessage: "Open table. Break and claim solids or stripes.",
   };
@@ -358,7 +410,8 @@ function createRack() {
       pocketTargetX: null,
       pocketTargetY: null,
       kind: "cue",
-      spinAngle: 0,
+      rollX: 0,
+      rollY: 0,
     },
   ];
 
@@ -382,7 +435,8 @@ function createRack() {
         pocketTargetX: null,
         pocketTargetY: null,
         kind: "object",
-        spinAngle: 0,
+        rollX: 0,
+      rollY: 0,
       });
       rackIndex += 1;
     }
@@ -453,7 +507,8 @@ function captureBalls(balls) {
     sinking: ball.sinking,
     sinkProgress: ball.sinkProgress,
     kind: ball.kind,
-    spinAngle: ball.spinAngle || 0,
+    rollX: ball.rollX || 0,
+    rollY: ball.rollY || 0,
   }));
 }
 
@@ -502,7 +557,8 @@ function updateBallPositions(balls, delta) {
     ball.y += ball.vy * delta;
     ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
     ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
-    ball.spinAngle = (ball.spinAngle || 0) + Math.hypot(ball.vx, ball.vy) * delta / TABLE.ballRadius;
+    ball.rollX = (ball.rollX || 0) + ball.vx * delta / TABLE.ballRadius;
+    ball.rollY = (ball.rollY || 0) + ball.vy * delta / TABLE.ballRadius;
 
     if (Math.abs(ball.vx) < TABLE.minVelocity) {
       ball.vx = 0;
@@ -764,9 +820,10 @@ function applyEightBallRules(room, playerId, outcome) {
 
   if (outcome.cueScratch || !legalShot) {
     room.game.currentTurnPlayerId = opponent?.id || shooter.id;
+    room.game.ballInHand = true;
     room.game.statusMessage = outcome.cueScratch
-      ? `${shooter.name} scratched. ${opponent?.name || "Opponent"} takes ball-in-hand style advantage.`
-      : `${shooter.name} committed a foul. ${opponent?.name || "Opponent"} is up next.`;
+      ? `${shooter.name} scratched. ${opponent?.name || "Opponent"} gets ball-in-hand — click to place the cue ball.`
+      : `${shooter.name} committed a foul. ${opponent?.name || "Opponent"} gets ball-in-hand.`;
     return;
   }
 
@@ -857,6 +914,15 @@ function runComputerTurn(room, computer) {
     room.game.isAiThinking = false;
     broadcastRoom(room);
     return;
+  }
+
+  // Auto-place for ball-in-hand
+  if (room.game.ballInHand) {
+    cueBall.x = 240;
+    cueBall.y = TABLE.height / 2;
+    cueBall.vx = 0;
+    cueBall.vy = 0;
+    room.game.ballInHand = false;
   }
 
   const shot = chooseComputerShot(room, cueBall, computer.id);
@@ -983,6 +1049,7 @@ function buildRoomPayload(room, playerId) {
       shotId: room.game.shotId,
       lastShotFrames: room.game.lastShotFrames,
       shotCount: room.game.shotCount,
+      ballInHand: room.game.ballInHand,
       statusMessage: room.game.statusMessage,
     },
   };

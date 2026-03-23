@@ -311,6 +311,22 @@ input[type="text"]:focus {
   letter-spacing: -0.02em;
 }
 
+/* ── Controls hint ─────────────────────────────────────── */
+
+.controls-hint {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.controls-hint p {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 /* ── Re-Rack ────────────────────────────────────────────── */
 
 .re-rack {
