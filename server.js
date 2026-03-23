@@ -12,7 +12,7 @@ const TABLE = {
   height: 520,
   ballRadius: 12,
   pocketRadius: 24,
-  pocketCaptureRadius: 16,
+  pocketCaptureRadius: 20,
   friction: 0.996,
   minVelocity: 0.05,
   maxShotSpeed: 12,
@@ -406,9 +406,9 @@ function runSimulation(room, playerId) {
   for (let frame = 0; frame < 1600; frame += 1) {
     for (let step = 0; step < TABLE.simulationSubsteps; step += 1) {
       updateBallPositions(room.game.balls, 1 / TABLE.simulationSubsteps);
+      detectPockets(room.game.balls, outcome);
       resolveWallCollisions(room.game.balls, outcome);
       resolveBallCollisions(room.game.balls, outcome);
-      detectPockets(room.game.balls, outcome);
     }
 
     frames.push(captureBalls(room.game.balls));
@@ -483,7 +483,7 @@ function updateBallPositions(balls, delta) {
     }
 
     if (ball.sinking) {
-      ball.sinkProgress = Math.min(ball.sinkProgress + 0.12 * TABLE.simulationSubsteps * delta, 1);
+      ball.sinkProgress = Math.min(ball.sinkProgress + 0.05 * TABLE.simulationSubsteps * delta, 1);
       ball.x += (ball.pocketTargetX - ball.x) * 0.38;
       ball.y += (ball.pocketTargetY - ball.y) * 0.38;
       ball.vx = 0;
@@ -514,10 +514,11 @@ function updateBallPositions(balls, delta) {
 }
 
 function resolveWallCollisions(balls, outcome) {
-  const minX = TABLE.ballRadius;
-  const maxX = TABLE.width - TABLE.ballRadius;
-  const minY = TABLE.ballRadius;
-  const maxY = TABLE.height - TABLE.ballRadius;
+  // Physics boundary matches the felt playing surface (18px border + ballRadius)
+  const minX = 30;
+  const maxX = TABLE.width - 30;
+  const minY = 30;
+  const maxY = TABLE.height - 30;
 
   for (const ball of balls) {
     if (ball.pocketed || ball.sinking) {
@@ -709,10 +710,17 @@ function applyEightBallRules(room, playerId, outcome) {
   }
 
   if (outcome.eightBallPocketed) {
-    // 8-ball pocketed on the break — re-rack (standard casual rule)
+    // BCA rule: 8-ball on the break = shooter wins (unless scratch = opponent wins)
     if (room.game.shotCount === 1 && room.mode !== "practice") {
-      room.game = createInitialGame(playerId, room.mode, room.players);
-      room.game.statusMessage = `${shooter.name} pocketed the 8 on the break. Re-racking — same player breaks again.`;
+      if (outcome.cueScratch) {
+        room.game.winnerId = opponent?.id || null;
+        room.game.winnerReason = `${shooter.name} scratched while pocketing the 8 on the break.`;
+        room.game.statusMessage = `${opponent?.name || "Opponent"} wins — ${shooter.name} scratched on the 8-ball break.`;
+      } else {
+        room.game.winnerId = shooter.id;
+        room.game.winnerReason = `${shooter.name} pocketed the 8-ball on the break.`;
+        room.game.statusMessage = `${shooter.name} wins — 8-ball pocketed on the break!`;
+      }
       return;
     }
 
@@ -727,6 +735,14 @@ function applyEightBallRules(room, playerId, outcome) {
     room.game.statusMessage = winsRack
       ? `${shooter.name} wins — 8-ball down!`
       : `${winner?.name || "Opponent"} wins. ${shooter.name} pocketed the 8 illegally.`;
+    return;
+  }
+
+  // BCA rule: scratch while shooting the 8-ball (even without pocketing it) = opponent wins
+  if (outcome.cueScratch && legalTarget === "eight") {
+    room.game.winnerId = opponent?.id || null;
+    room.game.winnerReason = `${shooter.name} scratched while shooting the 8-ball.`;
+    room.game.statusMessage = `${opponent?.name || "Opponent"} wins — ${shooter.name} scratched on the 8-ball shot.`;
     return;
   }
 
@@ -885,10 +901,10 @@ function chooseComputerShot(room, cueBall, playerId) {
       const ghostX = target.x - (tpx / tpDist) * TABLE.ballRadius * 2;
       const ghostY = target.y - (tpy / tpDist) * TABLE.ballRadius * 2;
 
-      // Reject ghost balls outside the table
+      // Reject ghost balls outside the playable area
       if (
-        ghostX < TABLE.ballRadius || ghostX > TABLE.width - TABLE.ballRadius ||
-        ghostY < TABLE.ballRadius || ghostY > TABLE.height - TABLE.ballRadius
+        ghostX < 30 || ghostX > TABLE.width - 30 ||
+        ghostY < 30 || ghostY > TABLE.height - 30
       ) {
         continue;
       }

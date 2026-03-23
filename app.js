@@ -485,74 +485,95 @@ function renderTable() {
 }
 
 function drawTable() {
-  // Outer rail — classic dark mahogany wood
-  const rail = ctx.createLinearGradient(0, 0, 0, canvas.height);
-  rail.addColorStop(0, "#2e1206");
+  const W = canvas.width;
+  const H = canvas.height;
+  const WOOD = 8;       // dark mahogany rail thickness
+  const CUSHION = 10;   // green rubber cushion thickness
+  const BORDER = WOOD + CUSHION; // 18px total — felt starts here
+
+  // 1. Outer mahogany wood rail
+  const rail = ctx.createLinearGradient(0, 0, 0, H);
+  rail.addColorStop(0, "#3d1a08");
   rail.addColorStop(0.5, "#1a0904");
-  rail.addColorStop(1, "#2e1206");
+  rail.addColorStop(1, "#3d1a08");
   ctx.fillStyle = rail;
-  roundRect(ctx, 0, 0, canvas.width, canvas.height, 28);
+  roundRect(ctx, 0, 0, W, H, 28);
   ctx.fill();
 
-  // Wood grain highlight along the rails
-  ctx.strokeStyle = "rgba(120, 60, 20, 0.35)";
+  // Wood grain lines
+  ctx.strokeStyle = "rgba(120, 60, 20, 0.3)";
   ctx.lineWidth = 1;
-  for (let i = 0; i < 4; i++) {
-    const offset = 4 + i * 4;
+  for (let i = 0; i < 3; i++) {
+    const off = 3 + i * 3;
     ctx.beginPath();
-    ctx.moveTo(offset, offset);
-    ctx.lineTo(canvas.width - offset, offset);
+    ctx.moveTo(off, off);
+    ctx.lineTo(W - off, off);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(off, H - off);
+    ctx.lineTo(W - off, H - off);
     ctx.stroke();
   }
 
-  // Classic billiards green felt
-  const felt = ctx.createLinearGradient(0, 24, 0, canvas.height - 24);
-  felt.addColorStop(0, "#2e6b1e");
+  // 2. Green rubber cushion band
+  ctx.fillStyle = "#185c18";
+  roundRect(ctx, WOOD, WOOD, W - WOOD * 2, H - WOOD * 2, 20);
+  ctx.fill();
+
+  // Cushion highlight
+  ctx.strokeStyle = "rgba(80, 200, 80, 0.22)";
+  ctx.lineWidth = 2;
+  roundRect(ctx, WOOD + 1, WOOD + 1, W - (WOOD + 1) * 2, H - (WOOD + 1) * 2, 19);
+  ctx.stroke();
+
+  // 3. Classic green felt playing surface
+  const felt = ctx.createLinearGradient(0, BORDER, 0, H - BORDER);
+  felt.addColorStop(0, "#2d6b1d");
   felt.addColorStop(0.45, "#1e4f14");
   felt.addColorStop(1, "#163a0e");
   ctx.fillStyle = felt;
-  roundRect(ctx, 24, 24, canvas.width - 48, canvas.height - 48, 22);
+  roundRect(ctx, BORDER, BORDER, W - BORDER * 2, H - BORDER * 2, 10);
   ctx.fill();
 
-  // Cushion inner edge — slight lighter strip where rail meets felt
-  ctx.strokeStyle = "rgba(80, 160, 60, 0.3)";
-  ctx.lineWidth = 3;
-  roundRect(ctx, 26, 26, canvas.width - 52, canvas.height - 52, 20);
+  // Felt inner edge highlight
+  ctx.strokeStyle = "rgba(60, 140, 60, 0.38)";
+  ctx.lineWidth = 2;
+  roundRect(ctx, BORDER, BORDER, W - BORDER * 2, H - BORDER * 2, 10);
   ctx.stroke();
 
-  // Head string and baulk circle markings
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  // 4. Table markings
+  ctx.strokeStyle = "rgba(255,255,255,0.10)";
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  ctx.moveTo(96, 26);
-  ctx.lineTo(96, canvas.height - 26);
+  ctx.moveTo(96, BORDER + 2);
+  ctx.lineTo(96, H - BORDER - 2);
   ctx.stroke();
   ctx.beginPath();
-  ctx.arc(192, canvas.height / 2, 88, 0, Math.PI * 2);
-  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.arc(192, H / 2, 88, 0, Math.PI * 2);
+  ctx.strokeStyle = "rgba(255,255,255,0.07)";
   ctx.stroke();
 
-  // Pockets
+  // 5. Pocket cutouts
   const pockets = roomState?.game?.table?.pockets || DEFAULT_POCKETS;
   pockets.forEach((pocket) => {
-    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 4, pocket.x, pocket.y, 26);
+    const rim = ctx.createRadialGradient(pocket.x, pocket.y, 3, pocket.x, pocket.y, 24);
     rim.addColorStop(0, "#050505");
-    rim.addColorStop(0.6, "#0e0e0e");
+    rim.addColorStop(0.55, "#0e0e0e");
     rim.addColorStop(1, "#1a0904");
     ctx.beginPath();
-    ctx.arc(pocket.x, pocket.y, 26, 0, Math.PI * 2);
+    ctx.arc(pocket.x, pocket.y, 24, 0, Math.PI * 2);
     ctx.fillStyle = rim;
     ctx.fill();
   });
 }
 
 function drawBallShadow(ball) {
-  if ((ball.pocketed || ball.sinking) && ball.id !== "cue") {
+  if (ball.pocketed) {
     return;
   }
 
   const radius = getBallRadius(ball);
-  const alpha = ball.sinking ? 0.18 : 0.24;
+  const alpha = ball.sinking ? 0.14 : 0.24;
   const shadow = ctx.createRadialGradient(ball.x + 3, ball.y + 5, 3, ball.x + 3, ball.y + 5, radius + 5);
   shadow.addColorStop(0, `rgba(0, 0, 0, ${alpha})`);
   shadow.addColorStop(1, "rgba(0, 0, 0, 0)");
@@ -562,17 +583,56 @@ function drawBallShadow(ball) {
   ctx.fill();
 }
 
+function drawSinkingBall(ball) {
+  const t = Math.min(ball.sinkProgress || 0, 1);
+  const baseRadius = roomState?.game?.table?.ballRadius || 12;
+  const drawRadius = Math.max(baseRadius * (1 - t * 0.88), 1);
+
+  // Spiral spin offset — orbits around ball.x/y (which is already moving toward pocket)
+  const spiralRadius = (1 - t) * baseRadius * 0.9;
+  const spiralAngle = t * Math.PI * 5; // 2.5 full rotations during sink
+  const drawX = ball.x + Math.cos(spiralAngle) * spiralRadius;
+  const drawY = ball.y + Math.sin(spiralAngle) * spiralRadius;
+
+  ctx.save();
+  ctx.globalAlpha = 1 - t * 0.5;
+
+  ctx.beginPath();
+  ctx.arc(drawX, drawY, drawRadius, 0, Math.PI * 2);
+  ctx.fillStyle = makeBallGradient({ ...ball, x: drawX, y: drawY }, drawRadius);
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.stroke();
+
+  // Stripe band for stripe balls
+  if (ball.suit === "stripes" && drawRadius > 3) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, drawRadius, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.translate(drawX, drawY);
+    ctx.rotate(ball.spinAngle || 0);
+    ctx.fillStyle = ball.color;
+    ctx.fillRect(-drawRadius, -drawRadius * 0.62, drawRadius * 2, drawRadius * 1.24);
+    ctx.restore();
+  }
+
+  ctx.restore();
+}
+
 function drawBall(ball) {
-  // Object balls vanish the moment they enter a pocket
-  if ((ball.pocketed || ball.sinking) && ball.id !== "cue") {
+  if (ball.pocketed) {
     return;
   }
-  if (ball.pocketed && ball.id === "cue") {
+  // Sinking object balls get the spiral whirl animation
+  if (ball.sinking && ball.id !== "cue") {
+    drawSinkingBall(ball);
     return;
   }
 
   const radius = getBallRadius(ball);
-  const alpha = ball.sinking ? 1 - ball.sinkProgress * 0.75 : 1; // cue-ball scratch fade
+  const alpha = 1;
   const spinAngle = ball.spinAngle || 0;
 
   ctx.save();
@@ -686,11 +746,7 @@ function makeBallGradient(ball, radius) {
 }
 
 function getBallRadius(ball) {
-  const base = roomState?.game?.table?.ballRadius || 12;
-  if (!ball.sinking) {
-    return base;
-  }
-  return Math.max(base * (1 - ball.sinkProgress * 0.55), 2);
+  return roomState?.game?.table?.ballRadius || 12;
 }
 
 function drawAimGuide() {
