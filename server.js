@@ -13,9 +13,10 @@ const TABLE = {
   ballRadius: 12,
   pocketRadius: 24,
   pocketCaptureRadius: 20,
-  friction: 0.996,
-  minVelocity: 0.05,
-  maxShotSpeed: 12,
+  rollingDecel: 0.018,   // constant deceleration per substep (linear, like real felt)
+  cushionRestitution: 0.82, // bounce energy retention off cushions
+  minVelocity: 0.03,
+  maxShotSpeed: 14,
   simulationSubsteps: 4,
   pockets: [
     { x: 22, y: 22 },
@@ -247,7 +248,7 @@ app.post("/api/rooms/:roomId/place-cue", (req, res) => {
   if (!room.game.ballInHand) {
     return res.status(409).json({ error: "No ball-in-hand available." });
   }
-  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 30 || x > 930 || y < 30 || y > 490) {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < 25 || x > 935 || y < 25 || y > 495) {
     return res.status(400).json({ error: "Position is off the table." });
   }
 
@@ -555,8 +556,19 @@ function updateBallPositions(balls, delta) {
 
     ball.x += ball.vx * delta;
     ball.y += ball.vy * delta;
-    ball.vx *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
-    ball.vy *= Math.pow(TABLE.friction, TABLE.simulationSubsteps * delta);
+
+    // Constant deceleration — like real rolling resistance on felt.
+    // Ball maintains speed longer at high velocity, then stops cleanly.
+    const speed = Math.hypot(ball.vx, ball.vy);
+    if (speed > TABLE.rollingDecel) {
+      const factor = (speed - TABLE.rollingDecel) / speed;
+      ball.vx *= factor;
+      ball.vy *= factor;
+    } else {
+      ball.vx = 0;
+      ball.vy = 0;
+    }
+
     ball.rollX = (ball.rollX || 0) + ball.vx * delta / TABLE.ballRadius;
     ball.rollY = (ball.rollY || 0) + ball.vy * delta / TABLE.ballRadius;
 
@@ -570,11 +582,12 @@ function updateBallPositions(balls, delta) {
 }
 
 function resolveWallCollisions(balls, outcome) {
-  // Physics boundary matches the felt playing surface (18px border + ballRadius)
-  const minX = 30;
-  const maxX = TABLE.width - 30;
-  const minY = 30;
-  const maxY = TABLE.height - 30;
+  // Ball bounces off the cushion rubber (13px from edge = midpoint of cushion + ballRadius)
+  const cushionEdge = 13 + TABLE.ballRadius; // 25px — ball visibly hits the cushion
+  const minX = cushionEdge;
+  const maxX = TABLE.width - cushionEdge;
+  const minY = cushionEdge;
+  const maxY = TABLE.height - cushionEdge;
 
   for (const ball of balls) {
     if (ball.pocketed || ball.sinking) {
@@ -583,21 +596,21 @@ function resolveWallCollisions(balls, outcome) {
 
     if (ball.x < minX) {
       ball.x = minX;
-      ball.vx *= -0.94;
+      ball.vx *= -TABLE.cushionRestitution;
       outcome.railContacts += 1;
     } else if (ball.x > maxX) {
       ball.x = maxX;
-      ball.vx *= -0.94;
+      ball.vx *= -TABLE.cushionRestitution;
       outcome.railContacts += 1;
     }
 
     if (ball.y < minY) {
       ball.y = minY;
-      ball.vy *= -0.94;
+      ball.vy *= -TABLE.cushionRestitution;
       outcome.railContacts += 1;
     } else if (ball.y > maxY) {
       ball.y = maxY;
-      ball.vy *= -0.94;
+      ball.vy *= -TABLE.cushionRestitution;
       outcome.railContacts += 1;
     }
   }
@@ -969,8 +982,8 @@ function chooseComputerShot(room, cueBall, playerId) {
 
       // Reject ghost balls outside the playable area
       if (
-        ghostX < 30 || ghostX > TABLE.width - 30 ||
-        ghostY < 30 || ghostY > TABLE.height - 30
+        ghostX < 25 || ghostX > TABLE.width - 25 ||
+        ghostY < 25 || ghostY > TABLE.height - 25
       ) {
         continue;
       }

@@ -340,7 +340,7 @@ function handleCanvasClick(event) {
   if (!canShoot() || !roomState.game.ballInHand) return;
 
   const point = getCanvasPoint(event);
-  if (point.x < 30 || point.x > 930 || point.y < 30 || point.y > 490) return;
+  if (point.x < 25 || point.x > 935 || point.y < 25 || point.y > 495) return;
 
   const balls = getDisplayedBalls();
   const tooClose = balls.some(
