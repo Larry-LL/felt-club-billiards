@@ -185,6 +185,19 @@ function connectEventStream(roomId) {
     };
     syncAnimationState(roomState);
     render();
+    // Show ball-in-hand prompt when opponent fouled and it's our turn
+    if (roomState.game.ballInHand && roomState.game.currentTurnPlayerId === playerId) {
+      showMessage("Opponent fouled! Click the table to place the cue ball, or press Space to keep it.", "success");
+    }
+    // Show server status messages (fouls, turn changes, etc.)
+    if (roomState.game.statusMessage) {
+      const msg = roomState.game.statusMessage;
+      const isFoul = msg.includes("foul") || msg.includes("scratched");
+      const isWin = msg.includes("wins");
+      if (isFoul || isWin) {
+        showMessage(msg, isFoul ? "error" : "success");
+      }
+    }
   };
 }
 
@@ -278,11 +291,11 @@ function startGameLoop() {
 
     if (canShoot() && !roomState.game.ballInHand) {
       if (keysDown.has("ArrowLeft")) {
-        aimAngle -= 0.025;
+        aimAngle -= 0.008;
         needsRender = true;
       }
       if (keysDown.has("ArrowRight")) {
-        aimAngle += 0.025;
+        aimAngle += 0.008;
         needsRender = true;
       }
     }
@@ -322,6 +335,10 @@ async function fireShot() {
     roomState = data;
     syncAnimationState(roomState);
     render();
+    // Show foul feedback if we fouled
+    if (data.game.ballInHand && data.game.currentTurnPlayerId !== playerId) {
+      showMessage("Foul! Opponent gets ball-in-hand — they can place the cue ball anywhere.", "error");
+    }
   } catch (error) {
     showMessage(error.message, "error");
   } finally {
@@ -527,6 +544,8 @@ function renderTable() {
   if (roomState.game.winnerId) {
     const winner = roomState.players.find((player) => player.id === roomState.game.winnerId);
     drawCenterMessage(`${winner?.name || "Winner"} takes the rack.`);
+  } else if (roomState.game.ballInHand && !canShoot()) {
+    drawCenterMessage("Foul — ball-in-hand for opponent.");
   } else if (!canShoot() && (roomState.game.isSimulating || roomState.game.isAiThinking)) {
     drawCenterMessage(roomState.game.isAiThinking ? "House Bot is reading the table." : "Shot resolving...");
   }
@@ -845,34 +864,161 @@ function drawAimGuide() {
   const cueBall = getCueBall();
   if (!cueBall) return;
 
+  const radius = roomState?.game?.table?.ballRadius || 12;
   const power = isCharging ? currentPower : 0.3;
-  const guideLength = 180 + power * 70;
   const backLength = 20 + power * 40;
-  const angle = aimAngle;
-  const endX = cueBall.x + Math.cos(angle) * guideLength;
-  const endY = cueBall.y + Math.sin(angle) * guideLength;
+  const dirX = Math.cos(aimAngle);
+  const dirY = Math.sin(aimAngle);
 
-  // Cue stick
+  // 1. Cue stick behind the ball
   ctx.beginPath();
   ctx.moveTo(
-    cueBall.x - Math.cos(angle) * (22 + backLength),
-    cueBall.y - Math.sin(angle) * (22 + backLength)
+    cueBall.x - dirX * (22 + backLength),
+    cueBall.y - dirY * (22 + backLength)
   );
-  ctx.lineTo(cueBall.x - Math.cos(angle) * 18, cueBall.y - Math.sin(angle) * 18);
+  ctx.lineTo(cueBall.x - dirX * 18, cueBall.y - dirY * 18);
   ctx.strokeStyle = "rgba(168, 103, 62, 0.95)";
   ctx.lineWidth = 7;
   ctx.lineCap = "round";
   ctx.stroke();
 
-  // Dotted aim line
-  ctx.beginPath();
-  ctx.moveTo(cueBall.x + Math.cos(angle) * 18, cueBall.y + Math.sin(angle) * 18);
-  ctx.lineTo(endX, endY);
-  ctx.strokeStyle = "rgba(255,255,255,0.78)";
-  ctx.lineWidth = isCharging ? 3 : 2;
-  ctx.setLineDash([10, 8]);
-  ctx.stroke();
-  ctx.setLineDash([]);
+  // 2. Raycast: find first ball the aim line hits
+  const balls = getDisplayedBalls().filter(
+    (b) => b.id !== "cue" && !b.pocketed && !b.sinking
+  );
+  const contactRadius = radius * 2; // cue + target ball radii
+  let closestT = Infinity;
+  let targetBall = null;
+  let ghostX = 0;
+  let ghostY = 0;
+
+  for (const ball of balls) {
+    const dx = ball.x - cueBall.x;
+    const dy = ball.y - cueBall.y;
+    const proj = dx * dirX + dy * dirY;
+    if (proj < contactRadius) continue; // behind or overlapping
+
+    const perpX = cueBall.x + proj * dirX - ball.x;
+    const perpY = cueBall.y + proj * dirY - ball.y;
+    const perpDist = Math.hypot(perpX, perpY);
+    if (perpDist >= contactRadius) continue; // ray misses
+
+    const backUp = Math.sqrt(contactRadius * contactRadius - perpDist * perpDist);
+    const contactT = proj - backUp;
+    if (contactT > 0 && contactT < closestT) {
+      closestT = contactT;
+      targetBall = ball;
+      ghostX = cueBall.x + contactT * dirX;
+      ghostY = cueBall.y + contactT * dirY;
+    }
+  }
+
+  if (targetBall) {
+    // Check if target ball is a legal hit
+    const myGroup = roomState.game.playerGroups[playerId];
+    const isOpen = roomState.game.openTable || !myGroup;
+    let legalHit = true;
+    if (!isOpen) {
+      const myRemaining = getDisplayedBalls().filter(
+        (b) => b.suit === myGroup && !b.pocketed
+      ).length;
+      if (myRemaining > 0) {
+        // Must hit own group — not opponent's group, not 8-ball
+        legalHit = targetBall.suit === myGroup;
+      } else {
+        // All own balls cleared — must hit 8-ball
+        legalHit = targetBall.number === 8;
+      }
+    }
+
+    const lineColor = legalHit ? "rgba(255,255,255,0.55)" : "rgba(255,80,80,0.7)";
+    const ghostColor = legalHit ? "rgba(255,255,255,0.45)" : "rgba(255,80,80,0.55)";
+    const predColor = legalHit ? "rgba(255,200,80,0.55)" : "rgba(255,80,80,0.45)";
+    const ringColor = legalHit ? "rgba(255,200,80,0.35)" : "rgba(255,80,80,0.4)";
+
+    // 3a. Dotted line from cue ball to ghost position
+    ctx.beginPath();
+    ctx.moveTo(cueBall.x + dirX * 18, cueBall.y + dirY * 18);
+    ctx.lineTo(ghostX, ghostY);
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 3b. Ghost cue ball at contact point
+    ctx.beginPath();
+    ctx.arc(ghostX, ghostY, radius, 0, Math.PI * 2);
+    ctx.strokeStyle = ghostColor;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = legalHit ? "rgba(255,255,255,0.08)" : "rgba(255,80,80,0.06)";
+    ctx.fill();
+
+    // 3c. Target ball deflection trajectory
+    const defDx = targetBall.x - ghostX;
+    const defDy = targetBall.y - ghostY;
+    const defDist = Math.hypot(defDx, defDy);
+    if (defDist > 0.5) {
+      const defNx = defDx / defDist;
+      const defNy = defDy / defDist;
+
+      // Cut angle determines prediction error — harder cuts = less accurate guide
+      const dot = dirX * defNx + dirY * defNy;
+      const cutAngle = Math.acos(Math.max(-1, Math.min(1, dot)));
+      const errorSign = (defNx * (-dirY) + defNy * dirX) > 0 ? 1 : -1;
+      const errorAmount = cutAngle * 0.12 * errorSign;
+      const predAngle = Math.atan2(defNy, defNx) + errorAmount;
+
+      const predLen = 110 - cutAngle * 30; // shorter line for harder cuts
+      ctx.beginPath();
+      ctx.moveTo(targetBall.x, targetBall.y);
+      ctx.lineTo(
+        targetBall.x + Math.cos(predAngle) * Math.max(predLen, 40),
+        targetBall.y + Math.sin(predAngle) * Math.max(predLen, 40)
+      );
+      ctx.strokeStyle = predColor;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 5]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Small ring indicator on target ball
+      ctx.beginPath();
+      ctx.arc(targetBall.x, targetBall.y, radius + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+
+      // 3d. Cue ball deflection after contact (thinner, fainter)
+      const cueDeflectX = dirX - defNx * dot;
+      const cueDeflectY = dirY - defNy * dot;
+      const cueDeflectDist = Math.hypot(cueDeflectX, cueDeflectY);
+      if (cueDeflectDist > 0.01 && dot < 0.98) {
+        const cdNx = cueDeflectX / cueDeflectDist;
+        const cdNy = cueDeflectY / cueDeflectDist;
+        ctx.beginPath();
+        ctx.moveTo(ghostX, ghostY);
+        ctx.lineTo(ghostX + cdNx * 60, ghostY + cdNy * 60);
+        ctx.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  } else {
+    // 3. No target — line extends to table edge or max distance
+    const maxLen = 400;
+    ctx.beginPath();
+    ctx.moveTo(cueBall.x + dirX * 18, cueBall.y + dirY * 18);
+    ctx.lineTo(cueBall.x + dirX * maxLen, cueBall.y + dirY * maxLen);
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([8, 6]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 }
 
 function drawBallInHandOverlay() {

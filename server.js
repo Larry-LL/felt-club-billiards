@@ -760,6 +760,22 @@ function applyEightBallRules(room, playerId, outcome) {
           ? outcome.firstContactNumber === 8
           : Boolean(firstHitBall) && firstHitBall.suit === legalTarget;
   const legalShot = legalFirstContact && (madeAnyBall || outcome.railContacts > 0);
+
+  console.log("[RULES]", {
+    shooter: shooter.name,
+    openTable: room.game.openTable,
+    shooterGroup,
+    legalTarget,
+    firstContactNumber: outcome.firstContactNumber,
+    firstHitBallSuit: firstHitBall?.suit,
+    legalFirstContact,
+    madeAnyBall,
+    railContacts: outcome.railContacts,
+    legalShot,
+    cueScratch: outcome.cueScratch,
+    willFoul: outcome.cueScratch || !legalShot,
+  });
+
   const pocketedSuits = outcome.pocketedNumbers
     .map(getNumberBall)
     .filter(Boolean)
@@ -912,8 +928,10 @@ function maybeQueueComputerTurn(room) {
 
   // Wait for the client animation to finish before firing the CPU shot.
   // Animation duration = frames * 16 ms; add 600 ms buffer.
+  // Extra delay when ball-in-hand so the foul message is visible to the player.
   const animDuration = room.game.lastShotFrames.length * 16;
-  const delay = Math.max(1400, animDuration + 600);
+  const ballInHandExtra = room.game.ballInHand ? 1800 : 0;
+  const delay = Math.max(1400, animDuration + 600) + ballInHandExtra;
 
   room.aiTimeout = setTimeout(() => {
     room.aiTimeout = null;
@@ -929,13 +947,34 @@ function runComputerTurn(room, computer) {
     return;
   }
 
-  // Auto-place for ball-in-hand
+  // Ball-in-hand: AI picks the best placement, broadcasts it, then shoots after a delay
   if (room.game.ballInHand) {
-    cueBall.x = 240;
-    cueBall.y = TABLE.height / 2;
+    const placement = chooseComputerPlacement(room, computer.id);
+    cueBall.x = placement.x;
+    cueBall.y = placement.y;
     cueBall.vx = 0;
     cueBall.vy = 0;
     room.game.ballInHand = false;
+    room.game.statusMessage = `${computer.name} placed the cue ball.`;
+    broadcastRoom(room);
+
+    // Delay before shooting so the player sees the placement
+    room.aiTimeout = setTimeout(() => {
+      room.aiTimeout = null;
+      runComputerShot(room, computer);
+    }, 1200);
+    return;
+  }
+
+  runComputerShot(room, computer);
+}
+
+function runComputerShot(room, computer) {
+  const cueBall = room.game.balls.find((ball) => ball.id === "cue" && !ball.pocketed);
+  if (!cueBall || room.game.winnerId || room.game.currentTurnPlayerId !== computer.id) {
+    room.game.isAiThinking = false;
+    broadcastRoom(room);
+    return;
   }
 
   const shot = chooseComputerShot(room, cueBall, computer.id);
@@ -950,6 +989,70 @@ function runComputerTurn(room, computer) {
   room.updatedAt = Date.now();
   broadcastRoom(room);
   maybeQueueComputerTurn(room);
+}
+
+function chooseComputerPlacement(room, playerId) {
+  const legalTarget = determineLegalTarget(room, playerId, countRemainingBySuit(room.game.balls));
+  const targets = room.game.balls.filter((ball) => {
+    if (ball.kind !== "object" || ball.pocketed) return false;
+    if (legalTarget === "any-non-eight") return ball.number !== 8;
+    if (legalTarget === "eight") return ball.number === 8;
+    return ball.suit === legalTarget;
+  });
+
+  // Try candidate positions and score each by best available shot
+  const candidates = [];
+  const step = 40;
+  for (let x = 60; x < TABLE.width - 60; x += step) {
+    for (let y = 60; y < TABLE.height - 60; y += step) {
+      // Skip if too close to any ball
+      const blocked = room.game.balls.some(
+        (b) => !b.pocketed && b.id !== "cue" && Math.hypot(b.x - x, b.y - y) < TABLE.ballRadius * 2.5
+      );
+      if (blocked) continue;
+
+      let bestScore = -1;
+      for (const target of targets) {
+        for (const pocket of TABLE.pockets) {
+          const tpx = pocket.x - target.x;
+          const tpy = pocket.y - target.y;
+          const tpDist = Math.hypot(tpx, tpy);
+          if (tpDist === 0) continue;
+
+          const ghostX = target.x - (tpx / tpDist) * TABLE.ballRadius * 2;
+          const ghostY = target.y - (tpy / tpDist) * TABLE.ballRadius * 2;
+          const cgx = ghostX - x;
+          const cgy = ghostY - y;
+          const cgDist = Math.hypot(cgx, cgy);
+          if (cgDist < TABLE.ballRadius * 3) continue;
+
+          const ctx2 = target.x - x;
+          const cty2 = target.y - y;
+          const ctDist = Math.hypot(ctx2, cty2);
+          const dot = (ctx2 * tpx + cty2 * tpy) / (ctDist * tpDist);
+          const cutAngle = Math.acos(clamp(dot, -1, 1));
+          if (cutAngle > Math.PI / 3) continue;
+
+          const cutScore = 1 - cutAngle / (Math.PI / 2);
+          const distScore = 1 - Math.min(cgDist / 600, 1);
+          const score = cutScore * 0.7 + distScore * 0.3;
+          if (score > bestScore) bestScore = score;
+        }
+      }
+
+      if (bestScore > 0) {
+        candidates.push({ x, y, score: bestScore });
+      }
+    }
+  }
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => b.score - a.score);
+    return candidates[0];
+  }
+
+  // Fallback: default position
+  return { x: 240, y: TABLE.height / 2 };
 }
 
 function chooseComputerShot(room, cueBall, playerId) {
@@ -1020,7 +1123,7 @@ function chooseComputerShot(room, cueBall, playerId) {
     }
   }
 
-  // Fallback: aim directly at nearest target
+  // Fallback: aim directly at nearest target with enough power to reach a rail
   if (!bestShot) {
     const nearest = targets.reduce((a, b) =>
       Math.hypot(a.x - cueBall.x, a.y - cueBall.y) <= Math.hypot(b.x - cueBall.x, b.y - cueBall.y) ? a : b
@@ -1028,9 +1131,12 @@ function chooseComputerShot(room, cueBall, playerId) {
     const distance = Math.hypot(nearest.x - cueBall.x, nearest.y - cueBall.y);
     bestShot = {
       angle: Math.atan2(nearest.y - cueBall.y, nearest.x - cueBall.x) + (Math.random() - 0.5) * 0.15,
-      power: clamp(distance / 280 + 0.22, 0.28, 0.88),
+      power: clamp(distance / 280 + 0.22, 0.45, 0.88),
     };
   }
+
+  // Ensure minimum power so balls reach a rail (avoid easy fouls)
+  bestShot.power = Math.max(bestShot.power, 0.6);
 
   return bestShot;
 }
