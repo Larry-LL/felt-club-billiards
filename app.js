@@ -4,16 +4,28 @@ const STORAGE_KEYS = {
   roomId: "felt-club-room-id",
 };
 
+// Lobby elements
+const lobbyScreen = document.getElementById("lobbyScreen");
+const gameScreen = document.getElementById("gameScreen");
 const nameInput = document.getElementById("nameInput");
 const roomInput = document.getElementById("roomInput");
-const onlineButton = document.getElementById("onlineButton");
+const quickMatchButton = document.getElementById("quickMatchButton");
 const computerButton = document.getElementById("computerButton");
+const createPrivateButton = document.getElementById("createPrivateButton");
 const joinRoomButton = document.getElementById("joinRoomButton");
+const joinSection = document.getElementById("joinSection");
+const statsOnline = document.getElementById("statsOnline");
+const statsGames = document.getElementById("statsGames");
+const openRoomsDiv = document.getElementById("openRooms");
+const openRoomsList = document.getElementById("openRoomsList");
+const lobbyMessage = document.getElementById("lobbyMessage");
+
+// Game elements
+const leaveButton = document.getElementById("leaveButton");
 const restartButton = document.getElementById("restartButton");
 const copyInviteButton = document.getElementById("copyInviteButton");
-const modeButtonsDiv = document.getElementById("modeButtons");
-const joinButtonsDiv = document.getElementById("joinButtons");
 const invitePanelDiv = document.getElementById("invitePanel");
+const waitingPanel = document.getElementById("waitingPanel");
 const statusBar = document.getElementById("statusBar");
 const turnText = document.getElementById("turnText");
 const tableStateText = document.getElementById("tableStateText");
@@ -49,17 +61,29 @@ let placementPos = null;
 let keysDown = new Set();
 let gameLoopId = 0;
 
+let lobbyPollTimer = 0;
+
 initialize();
 
 function initialize() {
   const roomIdFromUrl = new URL(window.location.href).searchParams.get("room");
   nameInput.value = localStorage.getItem(STORAGE_KEYS.name) || "";
 
+  // Lobby buttons
+  quickMatchButton.addEventListener("click", quickMatch);
   computerButton.addEventListener("click", () => createRoom("ai"));
-  onlineButton.addEventListener("click", () => createRoom("multiplayer"));
+  createPrivateButton.addEventListener("click", () => createRoom("multiplayer"));
   joinRoomButton.addEventListener("click", joinRoom);
+  leaveButton.addEventListener("click", leaveGame);
   restartButton.addEventListener("click", restartRack);
   copyInviteButton.addEventListener("click", copyInviteLink);
+
+  // Show join section when room code exists
+  roomInput.addEventListener("input", () => {
+    if (roomInput.value.trim()) {
+      joinSection.classList.remove("hidden");
+    }
+  });
 
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("keyup", handleKeyUp);
@@ -67,38 +91,151 @@ function initialize() {
   canvas.addEventListener("pointerdown", handleCanvasClick);
   window.addEventListener("beforeunload", closeEventStream);
 
-  render();
-
   if (roomIdFromUrl) {
+    // Direct invite link — go straight to game
     roomInput.value = roomIdFromUrl.toUpperCase();
-    modeButtonsDiv.classList.add("hidden");
-    joinButtonsDiv.classList.remove("hidden");
+    joinSection.classList.remove("hidden");
     reconnectToRoom(roomIdFromUrl.toUpperCase());
+  } else {
+    showLobby();
   }
 }
 
+function showLobby() {
+  lobbyScreen.classList.remove("hidden");
+  gameScreen.classList.add("hidden");
+  roomState = null;
+  closeEventStream();
+  stopGameLoop();
+  pollLobby();
+  lobbyPollTimer = setInterval(pollLobby, 5000);
+}
+
+function showGame() {
+  lobbyScreen.classList.add("hidden");
+  gameScreen.classList.remove("hidden");
+  clearInterval(lobbyPollTimer);
+  lobbyPollTimer = 0;
+  render();
+}
+
+async function pollLobby() {
+  try {
+    const data = await request("/api/rooms");
+    statsOnline.textContent = `${data.onlinePlayers} online`;
+    statsGames.textContent = `${data.activeGames} game${data.activeGames !== 1 ? "s" : ""}`;
+
+    if (data.openRooms.length > 0) {
+      openRoomsDiv.classList.remove("hidden");
+      openRoomsList.innerHTML = data.openRooms
+        .slice(0, 5)
+        .map(
+          (r) =>
+            `<div class="open-room-card" data-room="${r.roomId}">
+              <span class="open-room-host">${escapeHtml(r.host)}'s table</span>
+              <span class="open-room-join">Join</span>
+            </div>`
+        )
+        .join("");
+      openRoomsList.querySelectorAll(".open-room-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          roomInput.value = card.dataset.room;
+          joinRoom();
+        });
+      });
+    } else {
+      openRoomsDiv.classList.add("hidden");
+    }
+  } catch (_e) {
+    // Lobby poll failed, ignore
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function leaveGame() {
+  closeEventStream();
+  stopGameLoop();
+  roomState = null;
+  displayedBalls = null;
+  animatedShotId = 0;
+  localStorage.removeItem(STORAGE_KEYS.roomId);
+  updateUrl(null);
+  invitePanelDiv.classList.add("hidden");
+  waitingPanel.classList.add("hidden");
+  statusBar.classList.add("hidden");
+  messageBox.classList.add("hidden");
+  showLobby();
+}
+
+function stopGameLoop() {
+  if (gameLoopId) {
+    cancelAnimationFrame(gameLoopId);
+    gameLoopId = 0;
+  }
+}
+
+async function quickMatch() {
+  const name = getPlayerName();
+  if (!name || name === "Player") {
+    showLobbyMessage("Enter your name first.", "error");
+    nameInput.focus();
+    return;
+  }
+  quickMatchButton.disabled = true;
+  quickMatchButton.textContent = "Finding match...";
+  try {
+    const data = await request("/api/quickmatch", {
+      method: "POST",
+      body: JSON.stringify({ name, playerId }),
+    });
+    handleJoinedRoom(data);
+    if (data.players.length < 2) {
+      showMessage("Waiting for an opponent. Share the link or sit tight.", "info");
+    } else {
+      showMessage("Matched! Game is on.", "success");
+    }
+  } catch (error) {
+    showLobbyMessage(error.message, "error");
+  } finally {
+    quickMatchButton.disabled = false;
+    quickMatchButton.textContent = "Quick Match";
+  }
+}
+
+function showLobbyMessage(text, tone = "info") {
+  lobbyMessage.className = `message ${tone}`;
+  lobbyMessage.textContent = text;
+  lobbyMessage.classList.remove("hidden");
+  setTimeout(() => lobbyMessage.classList.add("hidden"), 4000);
+}
+
 async function createRoom(mode) {
+  const name = getPlayerName();
+  if (!name || name === "Player") {
+    showLobbyMessage("Enter your name first.", "error");
+    nameInput.focus();
+    return;
+  }
   toggleBusy(true);
   try {
     const data = await request("/api/rooms", {
       method: "POST",
-      body: JSON.stringify({
-        name: getPlayerName(),
-        playerId,
-        mode,
-      }),
+      body: JSON.stringify({ name, playerId, mode }),
     });
     handleJoinedRoom(data);
     showMessage(
-      mode === "practice"
-        ? "Practice table ready. Open table rules are shown, but practice never ends the rack."
-        : mode === "ai"
-          ? "Computer room ready. House Bot follows the same 8-ball rules."
-          : "Room created. Copy the room link and send it to the other player.",
+      mode === "ai"
+        ? "House Bot is ready. You break first."
+        : "Room created. Share the link to invite a friend.",
       "success"
     );
   } catch (error) {
-    showMessage(error.message, "error");
+    showLobbyMessage(error.message, "error");
   } finally {
     toggleBusy(false);
   }
@@ -107,7 +244,13 @@ async function createRoom(mode) {
 async function joinRoom() {
   const roomId = roomInput.value.trim().toUpperCase();
   if (!roomId) {
-    showMessage("Enter a room code before joining.", "error");
+    showLobbyMessage("Enter a room code before joining.", "error");
+    return;
+  }
+  const name = getPlayerName();
+  if (!name || name === "Player") {
+    showLobbyMessage("Enter your name first.", "error");
+    nameInput.focus();
     return;
   }
 
@@ -115,15 +258,12 @@ async function joinRoom() {
   try {
     const data = await request(`/api/rooms/${roomId}/join`, {
       method: "POST",
-      body: JSON.stringify({
-        name: getPlayerName(),
-        playerId,
-      }),
+      body: JSON.stringify({ name, playerId }),
     });
     handleJoinedRoom(data);
-    showMessage("Joined the room. The rack is live and synced through this server.", "success");
+    showMessage("Joined. Game on.", "success");
   } catch (error) {
-    showMessage(error.message, "error");
+    showLobbyMessage(error.message, "error");
   } finally {
     toggleBusy(false);
   }
@@ -136,8 +276,7 @@ async function reconnectToRoom(roomId) {
   } catch (_error) {
     localStorage.removeItem(STORAGE_KEYS.roomId);
     updateUrl(null);
-    modeButtonsDiv.classList.remove("hidden");
-    joinButtonsDiv.classList.add("hidden");
+    showLobby();
   }
 }
 
@@ -156,21 +295,17 @@ function handleJoinedRoom(data) {
   connectEventStream(data.roomId);
   syncAnimationState(data, true);
 
-  if (!data.you) {
-    // Fetched state but not seated — keep join button visible
-    modeButtonsDiv.classList.add("hidden");
-    joinButtonsDiv.classList.remove("hidden");
-    invitePanelDiv.classList.add("hidden");
-    statusBar.classList.add("hidden");
+  // Show/hide panels based on game state
+  statusBar.classList.remove("hidden");
+  if (data.mode === "multiplayer" && data.players.length < 2) {
+    invitePanelDiv.classList.remove("hidden");
+    waitingPanel.classList.remove("hidden");
   } else {
-    modeButtonsDiv.classList.add("hidden");
-    joinButtonsDiv.classList.add("hidden");
-    statusBar.classList.remove("hidden");
-    if (data.mode === "multiplayer") {
-      invitePanelDiv.classList.remove("hidden");
-    }
+    invitePanelDiv.classList.add("hidden");
+    waitingPanel.classList.add("hidden");
   }
 
+  showGame();
   render();
 }
 
@@ -184,6 +319,13 @@ function connectEventStream(roomId) {
       you: payload.players.find((player) => player.id === playerId) || roomState?.you || null,
     };
     syncAnimationState(roomState);
+
+    // Hide waiting panel when opponent joins
+    if (roomState.players.length >= 2) {
+      waitingPanel.classList.add("hidden");
+      invitePanelDiv.classList.add("hidden");
+    }
+
     render();
     // Show ball-in-hand prompt when opponent fouled and it's our turn
     if (roomState.game.ballInHand && roomState.game.currentTurnPlayerId === playerId) {

@@ -46,14 +46,106 @@ const BALLS = [
   { number: 15, suit: "stripes", color: "#8d2c2c" },
 ];
 
-app.use(express.json());
+app.use(express.json({ limit: "16kb" }));
 app.use(express.static(__dirname));
+
+// Simple in-memory rate limiter
+const rateLimits = new Map();
+function rateLimit(key, maxPerMinute = 30) {
+  const now = Date.now();
+  const window = rateLimits.get(key) || [];
+  const recent = window.filter((t) => now - t < 60000);
+  if (recent.length >= maxPerMinute) return false;
+  recent.push(now);
+  rateLimits.set(key, recent);
+  return true;
+}
+setInterval(() => {
+  const cutoff = Date.now() - 120000;
+  for (const [key, times] of rateLimits.entries()) {
+    const fresh = times.filter((t) => t > cutoff);
+    if (fresh.length === 0) rateLimits.delete(key);
+    else rateLimits.set(key, fresh);
+  }
+}, 60000);
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, rooms: rooms.size });
 });
 
+// List open multiplayer rooms waiting for a second player
+app.get("/api/rooms", (_req, res) => {
+  const openRooms = [];
+  for (const [, room] of rooms) {
+    if (
+      room.mode === "multiplayer" &&
+      room.players.length === 1 &&
+      room.players[0].connected &&
+      room.clients.size > 0
+    ) {
+      openRooms.push({
+        roomId: room.id,
+        host: room.players[0].name,
+        createdAt: room.createdAt,
+      });
+    }
+  }
+  // Also count active games for stats
+  let activeGames = 0;
+  let onlinePlayers = 0;
+  for (const [, room] of rooms) {
+    if (room.clients.size > 0) {
+      activeGames++;
+      onlinePlayers += room.players.filter((p) => p.connected && !p.isComputer).length;
+    }
+  }
+  res.json({ openRooms, activeGames, onlinePlayers });
+});
+
+// Quick match: join an open room or create a new one
+app.post("/api/quickmatch", (req, res) => {
+  const name = sanitizeName(req.body?.name);
+  const incomingPlayerId = readOrCreatePlayerId(req.body?.playerId);
+  const ip = req.ip || "unknown";
+  if (!rateLimit(ip, 20)) {
+    return res.status(429).json({ error: "Too many requests. Slow down." });
+  }
+
+  // Find an open multiplayer room not created by this player
+  for (const [, room] of rooms) {
+    if (
+      room.mode === "multiplayer" &&
+      room.players.length === 1 &&
+      room.players[0].connected &&
+      room.players[0].id !== incomingPlayerId &&
+      room.clients.size > 0
+    ) {
+      // Join this room
+      room.players.push({
+        id: incomingPlayerId,
+        name,
+        connected: true,
+        lastSeenAt: Date.now(),
+        isComputer: false,
+      });
+      ensurePlayerGroups(room);
+      room.game.statusMessage = `${room.players[1].name} joined the table. ${room.players[0].name} breaks first on an open table.`;
+      room.updatedAt = Date.now();
+      broadcastRoom(room);
+      return res.json(buildRoomPayload(room, incomingPlayerId));
+    }
+  }
+
+  // No open room — create a new one
+  const room = createRoom({ playerId: incomingPlayerId, name, mode: "multiplayer" });
+  return res.status(201).json(buildRoomPayload(room, incomingPlayerId));
+});
+
 app.post("/api/rooms", (req, res) => {
+  const ip = req.ip || "unknown";
+  if (!rateLimit(ip, 15)) {
+    return res.status(429).json({ error: "Too many requests. Slow down." });
+  }
   const name = sanitizeName(req.body?.name);
   const playerId = readOrCreatePlayerId(req.body?.playerId);
   const mode = ["practice", "ai"].includes(req.body?.mode) ? req.body.mode : "multiplayer";
@@ -309,7 +401,7 @@ app.get(/.*/, (_req, res) => {
 });
 
 setInterval(() => {
-  const cutoff = Date.now() - 1000 * 60 * 60 * 8;
+  const cutoff = Date.now() - 1000 * 60 * 60; // 1 hour stale rooms
   for (const [roomId, room] of rooms.entries()) {
     if (room.updatedAt < cutoff && room.clients.size === 0) {
       if (room.aiTimeout) {
@@ -318,7 +410,7 @@ setInterval(() => {
       rooms.delete(roomId);
     }
   }
-}, 1000 * 60 * 30);
+}, 1000 * 60 * 5);
 
 app.listen(PORT, () => {
   console.log(`Billiards game running at http://localhost:${PORT}`);
@@ -760,21 +852,6 @@ function applyEightBallRules(room, playerId, outcome) {
           ? outcome.firstContactNumber === 8
           : Boolean(firstHitBall) && firstHitBall.suit === legalTarget;
   const legalShot = legalFirstContact && (madeAnyBall || outcome.railContacts > 0);
-
-  console.log("[RULES]", {
-    shooter: shooter.name,
-    openTable: room.game.openTable,
-    shooterGroup,
-    legalTarget,
-    firstContactNumber: outcome.firstContactNumber,
-    firstHitBallSuit: firstHitBall?.suit,
-    legalFirstContact,
-    madeAnyBall,
-    railContacts: outcome.railContacts,
-    legalShot,
-    cueScratch: outcome.cueScratch,
-    willFoul: outcome.cueScratch || !legalShot,
-  });
 
   const pocketedSuits = outcome.pocketedNumbers
     .map(getNumberBall)

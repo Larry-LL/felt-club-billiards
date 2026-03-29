@@ -19,6 +19,9 @@
     "url": "https://github.com/Larry-LL/felt-club-billiards/issues"
   },
   "homepage": "https://github.com/Larry-LL/felt-club-billiards#readme",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "express": "^5.2.1"
   }

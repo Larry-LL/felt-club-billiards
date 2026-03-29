@@ -3,29 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Felt Club 8-Ball</title>
+    <title>Felt Club — 8-Ball Billiards</title>
+    <meta name="description" content="Play 8-ball billiards online with friends or against the computer. No download, no signup." />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="shell">
-      <aside class="sidebar">
-        <h1 class="logo">Felt Club</h1>
-
-        <input id="nameInput" type="text" maxlength="24" placeholder="Your name" />
-        <input id="roomInput" type="hidden" />
-
-        <div id="modeButtons" class="button-col">
-          <button id="computerButton" class="primary-button" type="button">Solo vs Computer</button>
-          <button id="onlineButton" class="secondary-button" type="button">Play Online</button>
+    <!-- ── Lobby screen ──────────────────────────────────── -->
+    <div id="lobbyScreen" class="lobby-screen">
+      <div class="lobby-container">
+        <div class="lobby-header">
+          <h1 class="lobby-logo">Felt Club</h1>
+          <p class="lobby-tagline">8-Ball Billiards — play anyone, anywhere</p>
         </div>
 
-        <div id="joinButtons" class="button-col hidden">
-          <button id="joinRoomButton" class="primary-button" type="button">Join Game</button>
+        <div class="lobby-card">
+          <input id="nameInput" type="text" maxlength="24" placeholder="Enter your name" />
+
+          <div class="lobby-actions">
+            <button id="quickMatchButton" class="primary-button lobby-btn" type="button">
+              Quick Match
+            </button>
+            <div class="lobby-row">
+              <button id="computerButton" class="secondary-button lobby-btn" type="button">
+                Solo vs Computer
+              </button>
+              <button id="createPrivateButton" class="secondary-button lobby-btn" type="button">
+                Private Room
+              </button>
+            </div>
+          </div>
+
+          <div id="joinSection" class="join-section hidden">
+            <div class="join-row">
+              <input id="roomInput" type="text" maxlength="8" placeholder="Room code" />
+              <button id="joinRoomButton" class="primary-button" type="button">Join</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="lobbyStats" class="lobby-stats">
+          <span id="statsOnline">0 online</span>
+          <span class="lobby-stats-dot"></span>
+          <span id="statsGames">0 games</span>
+        </div>
+
+        <div id="openRooms" class="open-rooms hidden">
+          <span class="stat-label">Open Tables</span>
+          <div id="openRoomsList" class="open-rooms-list"></div>
+        </div>
+
+        <div id="lobbyMessage" class="message hidden"></div>
+      </div>
+    </div>
+
+    <!-- ── Game screen ───────────────────────────────────── -->
+    <div id="gameScreen" class="shell hidden">
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <button id="leaveButton" class="leave-button" type="button" title="Leave table">&larr;</button>
+          <h1 class="logo">Felt Club</h1>
         </div>
 
         <div id="invitePanel" class="invite-panel hidden">
           <span class="invite-label">Invite a friend</span>
           <button id="copyInviteButton" class="secondary-button" type="button">Copy Link</button>
+        </div>
+
+        <div id="waitingPanel" class="invite-panel hidden">
+          <span class="invite-label">Waiting for opponent</span>
+          <p class="waiting-text">Share the link or wait for a quick match player.</p>
         </div>
 
         <div id="message" class="message hidden"></div>
@@ -53,7 +99,7 @@
 
         <div class="controls-hint">
           <span class="stat-label">Controls</span>
-          <p>← → Aim · Hold Space to charge · Release to shoot</p>
+          <p>&larr; &rarr; Aim &middot; Hold Space to charge &middot; Release to shoot</p>
         </div>
 
         <button id="restartButton" class="secondary-button re-rack" type="button" disabled>Re-Rack</button>
