@@ -1321,8 +1321,9 @@ function getInviteUrl(roomId) {
 }
 
 function toggleBusy(nextBusy) {
+  quickMatchButton.disabled = nextBusy;
   computerButton.disabled = nextBusy;
-  onlineButton.disabled = nextBusy;
+  createPrivateButton.disabled = nextBusy;
   joinRoomButton.disabled = nextBusy;
   restartButton.disabled = nextBusy || !roomState;
 }
