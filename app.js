@@ -1231,7 +1231,11 @@ function syncAnimationState(data, forceReset = false) {
     data.game.lastShotFrames.length > 1;
 
   if (!hasNewShot) {
-    displayedBalls = data.game.balls;
+    // Don't overwrite displayedBalls while an animation is playing —
+    // the REST response arrives after SSE already started the animation.
+    if (!animationTimer) {
+      displayedBalls = data.game.balls;
+    }
     return;
   }
 
