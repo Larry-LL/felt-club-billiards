@@ -60,6 +60,7 @@ let shotInFlight = false;
 let placementPos = null;
 let keysDown = new Set();
 let gameLoopId = 0;
+let lastFiredShotId = 0;
 
 let lobbyPollTimer = 0;
 
@@ -314,11 +315,19 @@ function connectEventStream(roomId) {
   eventSource = new EventSource(`/api/rooms/${roomId}/events?playerId=${encodeURIComponent(playerId)}`);
   eventSource.onmessage = (event) => {
     const payload = JSON.parse(event.data);
+    const incomingShotId = payload.game?.shotId || 0;
+    const isOwnShot = incomingShotId === lastFiredShotId;
+
     roomState = {
       ...payload,
       you: payload.players.find((player) => player.id === playerId) || roomState?.you || null,
     };
-    syncAnimationState(roomState);
+
+    // For our own shots, fireShot already handles the animation via the REST
+    // response. Only run syncAnimationState for opponent shots (via SSE).
+    if (!isOwnShot) {
+      syncAnimationState(roomState);
+    }
 
     // Hide waiting panel when opponent joins
     if (roomState.players.length >= 2) {
@@ -475,6 +484,8 @@ async function fireShot() {
       }),
     });
     roomState = data;
+    // Mark this shot as ours so SSE handler doesn't interfere
+    lastFiredShotId = data.game.shotId;
     syncAnimationState(roomState);
     render();
     // Show foul feedback if we fouled
