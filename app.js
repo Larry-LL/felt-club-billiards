@@ -315,19 +315,13 @@ function connectEventStream(roomId) {
   eventSource = new EventSource(`/api/rooms/${roomId}/events?playerId=${encodeURIComponent(playerId)}`);
   eventSource.onmessage = (event) => {
     const payload = JSON.parse(event.data);
-    const incomingShotId = payload.game?.shotId || 0;
-    const isOwnShot = incomingShotId === lastFiredShotId;
 
     roomState = {
       ...payload,
       you: payload.players.find((player) => player.id === playerId) || roomState?.you || null,
     };
 
-    // For our own shots, fireShot already handles the animation via the REST
-    // response. Only run syncAnimationState for opponent shots (via SSE).
-    if (!isOwnShot) {
-      syncAnimationState(roomState);
-    }
+    syncAnimationState(roomState);
 
     // Hide waiting panel when opponent joins
     if (roomState.players.length >= 2) {
@@ -484,9 +478,19 @@ async function fireShot() {
       }),
     });
     roomState = data;
-    // Mark this shot as ours so SSE handler doesn't interfere
     lastFiredShotId = data.game.shotId;
-    syncAnimationState(roomState);
+    // Always play our own shot animation from the REST response.
+    // Cancel any SSE-triggered animation and force-start from our data.
+    cancelAnimation();
+    if (
+      Array.isArray(data.game.lastShotFrames) &&
+      data.game.lastShotFrames.length > 1
+    ) {
+      animatedShotId = data.game.shotId;
+      playAnimation(data.game.lastShotFrames, data.game.balls);
+    } else {
+      displayedBalls = data.game.balls;
+    }
     render();
     // Show foul feedback if we fouled
     if (data.game.ballInHand && data.game.currentTurnPlayerId !== playerId) {
@@ -1235,6 +1239,12 @@ function syncAnimationState(data, forceReset = false) {
     return;
   }
 
+  // Animation is currently playing — don't touch displayedBalls at all.
+  // The playAnimation step function manages displayedBalls until it finishes.
+  if (animationTimer) {
+    return;
+  }
+
   const hasNewShot =
     Number.isFinite(data.game.shotId) &&
     data.game.shotId > animatedShotId &&
@@ -1242,11 +1252,7 @@ function syncAnimationState(data, forceReset = false) {
     data.game.lastShotFrames.length > 1;
 
   if (!hasNewShot) {
-    // Don't overwrite displayedBalls while an animation is playing —
-    // the REST response arrives after SSE already started the animation.
-    if (!animationTimer) {
-      displayedBalls = data.game.balls;
-    }
+    displayedBalls = data.game.balls;
     return;
   }
 
