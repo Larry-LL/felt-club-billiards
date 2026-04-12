@@ -316,9 +316,10 @@ app.post("/api/rooms/:roomId/shots", (req, res) => {
   applyEightBallRules(room, playerId, outcome);
   room.updatedAt = Date.now();
   broadcastRoom(room);
+  const response = buildRoomPayload(room, playerId);
   maybeQueueComputerTurn(room);
 
-  return res.json(buildRoomPayload(room, playerId));
+  return res.json(response);
 });
 
 app.post("/api/rooms/:roomId/place-cue", (req, res) => {

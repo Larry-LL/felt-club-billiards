@@ -703,7 +703,7 @@ function renderTable() {
     drawCenterMessage(`${winner?.name || "Winner"} takes the rack.`);
   } else if (roomState.game.ballInHand && !canShoot()) {
     drawCenterMessage("Foul — ball-in-hand for opponent.");
-  } else if (!canShoot() && (roomState.game.isSimulating || roomState.game.isAiThinking)) {
+  } else if (!canShoot() && !animationTimer && (roomState.game.isSimulating || roomState.game.isAiThinking)) {
     drawCenterMessage(roomState.game.isAiThinking ? "House Bot is reading the table." : "Shot resolving...");
   }
 }
